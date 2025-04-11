@@ -163,7 +163,19 @@ export const FileWriteTool = {
         )
     }
   },
-  async validateInput({ file_path }, { readFileTimestamps }) {
+  async validateInput({ file_path, content }, { readFileTimestamps }) {
+    const protectedExtensions = [
+      '.exe', '.dll', '.sys', '.bin', '.bat', '.sh', 
+      '.conf', '.config', '.env', '.pem', '.key'
+    ]
+    
+    if (protectedExtensions.some(ext => file_path.toLowerCase().endsWith(ext))) {
+      return {
+        result: false,
+        message: `Writing to ${file_path} is not allowed for security reasons`,
+      }
+    }
+
     const fullFilePath = isAbsolute(file_path)
       ? file_path
       : resolve(getCwd(), file_path)

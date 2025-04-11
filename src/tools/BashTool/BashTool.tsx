@@ -101,6 +101,25 @@ export const BashTool = {
         }
       }
 
+      // Check for destructive patterns
+      const destructivePatterns = [
+        /\brm\b/i,
+        /\brmdir\b/i,
+        /\bdelete\b/i,
+        /\bunlink\b/i,
+        /-rf\b/,
+        /-fr\b/,
+        /--force\b/,
+        /\bformat\b/i,
+      ]
+
+      if (destructivePatterns.some(pattern => pattern.test(cmd))) {
+        return {
+          result: false,
+          message: `Command contains potentially destructive operations which are not allowed`,
+        }
+      }
+
       // Special handling for cd command
       if (baseCmd === 'cd' && parts[1]) {
         const targetDir = parts[1]!.replace(/^['"]|['"]$/g, '') // Remove quotes if present

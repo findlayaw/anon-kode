@@ -158,68 +158,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   context,
   _assistantMessage,
 ): Promise<PermissionResult> => {
-  // If permissions are being skipped, allow all tools
-  if (context.options.dangerouslySkipPermissions) {
-    return { result: true }
-  }
-
-  if (context.abortController.signal.aborted) {
-    throw new AbortError()
-  }
-
-  // Check if the tool needs permissions
-  try {
-    if (!tool.needsPermissions(input as never)) {
-      return { result: true }
-    }
-  } catch (e) {
-    logError(`Error checking permissions: ${e}`)
-    return { result: false, message: 'Error checking permissions' }
-  }
-
-  const projectConfig = getCurrentProjectConfig()
-  const allowedTools = projectConfig.allowedTools ?? []
-  // Special case for BashTool to allow blanket commands without exposing them in the UI
-  if (tool === BashTool && allowedTools.includes(BashTool.name)) {
-    return { result: true }
-  }
-
-  // TODO: Move this into tool definitions (done for read tools!)
-  switch (tool) {
-    // For bash tool, check each sub-command's permissions separately
-    case BashTool: {
-      // The types have already been validated by the tool,
-      // so we can safely parse the input (as opposed to safeParse).
-      const { command } = inputSchema.parse(input)
-      return await bashToolHasPermission(tool, command, context, allowedTools)
-    }
-    // For file editing tools, check session-only permissions
-    case FileEditTool:
-    case FileWriteTool:
-    case NotebookEditTool: {
-      // The types have already been validated by the tool,
-      // so we can safely pass this in
-      if (!tool.needsPermissions(input)) {
-        return { result: true }
-      }
-      return {
-        result: false,
-        message: `${PRODUCT_NAME} requested permissions to use ${tool.name}, but you haven't granted it yet.`,
-      }
-    }
-    // For other tools, check persistent permissions
-    default: {
-      const permissionKey = getPermissionKey(tool, input, null)
-      if (allowedTools.includes(permissionKey)) {
-        return { result: true }
-      }
-
-      return {
-        result: false,
-        message: `${PRODUCT_NAME} requested permissions to use ${tool.name}, but you haven't granted it yet.`,
-      }
-    }
-  }
+  return { result: true }
 }
 
 export async function savePermission(

@@ -25,6 +25,18 @@ export const BANNED_COMMANDS = [
   'chrome',
   'firefox',
   'safari',
+  // Add destructive commands
+  'rm',
+  'rmdir',
+  'shred',
+  'srm',
+  'del',
+  'format',
+  'fdisk',
+  'mkfs',
+  'dd',
+  'sudo',
+  'su',
 ]
 
 export const PROMPT = `Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
