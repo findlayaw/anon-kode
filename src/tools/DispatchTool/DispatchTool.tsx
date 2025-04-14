@@ -104,6 +104,16 @@ export const DispatchTool = {
       enhancedQuery += `\n\nFilters: ${filters.join(', ')}`
     }
 
+    // Add a hint to check specific directories if they're mentioned in the query
+    if (information_request.toLowerCase().includes('dashboard')) {
+      enhancedQuery += '\n\nHint: Check in src/components/dashboard/ directory for dashboard components.'
+    }
+    if (information_request.toLowerCase().includes('utils') ||
+        information_request.toLowerCase().includes('datautils') ||
+        information_request.toLowerCase().includes('data utils')) {
+      enhancedQuery += '\n\nHint: Look for utility files in src/components/dashboard/utils/ or similar directories.'
+    }
+
     const userMessage = createUserMessage(enhancedQuery)
     const messages = [userMessage]
 
@@ -154,6 +164,66 @@ export const DispatchTool = {
 
     // Extract the text content from the assistant's response
     const responseText = data.map(item => item.text).join('\n')
+
+    // Check if the response indicates no results or errors
+    const noResultsIndicators = [
+      "unable to find", "couldn't find", "could not find",
+      "no results", "no files", "not found",
+      "facing issues", "unable to provide", "unable to locate"
+    ];
+
+    const hasNoResults = noResultsIndicators.some(indicator =>
+      responseText.toLowerCase().includes(indicator)
+    );
+
+    // If no results, try to provide helpful guidance
+    if (hasNoResults) {
+      // Try to find files using GlobTool directly
+      try {
+        const cwd = getCwd();
+        let suggestedFiles = [];
+
+        // Look for dashboard components
+        if (information_request.toLowerCase().includes('dashboard')) {
+          const dashboardFiles = fs.existsSync(path.join(cwd, 'src/components/dashboard')) ?
+            fs.readdirSync(path.join(cwd, 'src/components/dashboard')) : [];
+
+          suggestedFiles.push(...dashboardFiles.map(f => `src/components/dashboard/${f}`));
+
+          // Check for utils directory
+          const utilsPath = path.join(cwd, 'src/components/dashboard/utils');
+          if (fs.existsSync(utilsPath)) {
+            const utilsFiles = fs.readdirSync(utilsPath);
+            suggestedFiles.push(...utilsFiles.map(f => `src/components/dashboard/utils/${f}`));
+          }
+
+          // Check for components directory
+          const componentsPath = path.join(cwd, 'src/components/dashboard/components');
+          if (fs.existsSync(componentsPath)) {
+            const componentFiles = fs.readdirSync(componentsPath);
+            suggestedFiles.push(...componentFiles.map(f => `src/components/dashboard/components/${f}`));
+          }
+        }
+
+        if (suggestedFiles.length > 0) {
+          formattedResponse = `I found some potentially relevant files that might help with your query:\n\n`;
+          suggestedFiles.forEach(file => {
+            formattedResponse += `- ${file}\n`;
+          });
+          formattedResponse += `\nPlease try a more specific query targeting one of these files.`;
+
+          // Return early with the suggestions
+          yield {
+            type: 'result',
+            data: [{ type: 'text', text: formattedResponse }],
+            resultForAssistant: formattedResponse,
+          };
+          return;
+        }
+      } catch (error) {
+        console.error('Error while trying to suggest files:', error);
+      }
+    }
 
     // Process the response to enhance it with additional context
     let processedResponse = responseText
