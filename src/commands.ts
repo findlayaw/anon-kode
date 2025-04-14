@@ -11,6 +11,7 @@ import listen from './commands/listen'
 import login from './commands/login'
 import logout from './commands/logout'
 import mcp from './commands/mcp'
+import customMcp from './commands/custom-mcp'
 import * as model from './commands/model'
 import onboarding from './commands/onboarding'
 import pr_comments from './commands/pr_comments'
@@ -84,6 +85,7 @@ const COMMANDS = memoize((): Command[] => [
   help,
   init,
   mcp,
+  customMcp,
   model,
   onboarding,
   pr_comments,

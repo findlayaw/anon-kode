@@ -44,6 +44,7 @@ import { isDefaultSlowAndCapableModel } from '../utils/model'
 import { LogList } from '../screens/LogList'
 import { ResumeConversation } from '../screens/ResumeConversation'
 import { startMCPServer } from './mcp'
+import { startCustomMCPServer } from './custom-mcp'
 import { env } from '../utils/env'
 import { getCwd, setCwd, setOriginalCwd } from '../utils/state'
 import { omit } from 'lodash-es'
@@ -558,6 +559,30 @@ ${commandList}`,
         await startMCPServer(providedCwd)
       } catch (error) {
         console.error('Error: Failed to start MCP server:', error)
+        process.exit(1)
+      }
+    })
+
+  mcp
+    .command('custom-serve')
+    .description(`Start a custom ${PRODUCT_NAME} MCP server with limited tools`)
+    .action(async () => {
+      const providedCwd = (program.opts() as { cwd?: string }).cwd ?? cwd()
+      logEvent('tengu_mcp_custom_start', { providedCwd })
+
+      // Verify the directory exists
+      if (!existsSync(providedCwd)) {
+        console.error(`Error: Directory ${providedCwd} does not exist`)
+        process.exit(1)
+      }
+
+      try {
+        await setup(providedCwd, false)
+        console.log('Starting custom MCP server with limited tools...')
+        console.log('Disabled tools: FileWriteTool, LSTool, FileEditTool, FileReadTool, MemoryReadTool, MemoryWriteTool, NotebookReadTool, NotebookEditTool, ThinkTool')
+        await startCustomMCPServer(providedCwd)
+      } catch (error) {
+        console.error('Error: Failed to start custom MCP server:', error)
         process.exit(1)
       }
     })
