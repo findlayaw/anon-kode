@@ -69,7 +69,7 @@ Follow these steps:
    - Recognize design patterns and architectural components
 
 6. Format your response in a structured way that mimics a context engine:
-   - Include the file path for each result (DO NOT INCLUDE "mnt" IN THE FILE PATH)
+   - CRITICAL: Include the file path for each result. Always use Windows-style paths (e.g., "C:\\repos\\jouranlit-repo\\src\\main.ts") NOT Linux-style paths with "/mnt/". Users need exact Windows paths to navigate their files.
    - Show relevant code snippets with enough context to understand them (typically 5-10 lines before/after the key code)
    - Include line numbers when possible for better reference
    - Group related code together (e.g., a class and its methods, related functions)
