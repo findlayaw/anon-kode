@@ -556,6 +556,8 @@ ${commandList}`,
 
       try {
         await setup(providedCwd, false)
+        console.log('Starting MCP server...')
+        console.log('Disabled tools: BashTool, GlobTool, GrepTool')
         await startMCPServer(providedCwd)
       } catch (error) {
         console.error('Error: Failed to start MCP server:', error)
@@ -579,7 +581,7 @@ ${commandList}`,
       try {
         await setup(providedCwd, false)
         console.log('Starting custom MCP server with limited tools...')
-        console.log('Disabled tools: FileWriteTool, LSTool, FileEditTool, FileReadTool, MemoryReadTool, MemoryWriteTool, NotebookReadTool, NotebookEditTool, ThinkTool')
+        console.log('Disabled tools: FileWriteTool, LSTool, FileEditTool, FileReadTool, MemoryReadTool, MemoryWriteTool, NotebookReadTool, NotebookEditTool, ThinkTool, BashTool, GlobTool, GrepTool')
         await startCustomMCPServer(providedCwd)
       } catch (error) {
         console.error('Error: Failed to start custom MCP server:', error)

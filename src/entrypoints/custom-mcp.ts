@@ -45,12 +45,15 @@ const MCP_COMMANDS: Command[] = [review]
 // - NotebookReadTool
 // - NotebookEditTool
 // - ThinkTool
+// - BashTool
+// - GlobTool
+// - GrepTool
 const MCP_TOOLS: Tool[] = [
   // AgentTool, // Disabled in favor of CodeContextTool
-  BashTool,
+  // BashTool, // Hidden but still available for CodeContextTool
   DispatchTool,
-  GlobTool,
-  GrepTool,
+  // GlobTool, // Hidden but still available for CodeContextTool
+  // GrepTool, // Hidden but still available for CodeContextTool
 ]
 
 export async function startCustomMCPServer(cwd: string): Promise<void> {
