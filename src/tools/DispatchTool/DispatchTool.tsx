@@ -17,11 +17,35 @@ import { FileReadTool } from '../FileReadTool/FileReadTool'
 import { LSTool } from '../lsTool/lsTool'
 import { DESCRIPTION, SYSTEM_PROMPT } from './prompt'
 import { TOOL_NAME } from './constants'
+import path from 'path'
+import fs from 'fs'
+import { parseCodeStructure, extractCodeChunks, getDependencyInfo } from './codeParser'
+import { chunkCodeByStructure } from './chunking'
 
 const inputSchema = z.strictObject({
   information_request: z
     .string()
     .describe('A description of the information you need from the codebase'),
+  file_type: z
+    .string()
+    .describe('Optional filter for specific file types (e.g., "ts", "js", "tsx")')
+    .optional(),
+  directory: z
+    .string()
+    .describe('Optional filter to search only within a specific directory')
+    .optional(),
+  include_dependencies: z
+    .boolean()
+    .describe('Whether to include dependency information in the results')
+    .optional(),
+  max_results: z
+    .number()
+    .describe('Maximum number of results to return')
+    .optional(),
+  search_mode: z
+    .enum(['hybrid', 'keyword', 'semantic'])
+    .describe('Search mode to use: hybrid (default), keyword, or semantic')
+    .optional()
 })
 
 // Tools that the DispatchTool can use for searching the codebase
@@ -50,11 +74,37 @@ export const DispatchTool = {
   needsPermissions() {
     return false
   },
-  async *call({ information_request }, toolUseContext, canUseTool) {
+  async *call({ information_request, file_type, directory, include_dependencies, max_results, search_mode = 'hybrid' }, toolUseContext, canUseTool) {
     // Ensure we have read permissions for the filesystem
     grantReadPermissionForOriginalDir()
 
-    const userMessage = createUserMessage(information_request)
+    // Build an enhanced query with metadata filters if provided
+    let enhancedQuery = information_request
+
+    // Add metadata filters to the query if provided
+    const filters = []
+    if (file_type) {
+      filters.push(`file_type:${file_type}`)
+    }
+    if (directory) {
+      filters.push(`directory:${directory}`)
+    }
+    if (include_dependencies) {
+      filters.push('include_dependencies:true')
+    }
+    if (max_results) {
+      filters.push(`max_results:${max_results}`)
+    }
+    if (search_mode) {
+      filters.push(`search_mode:${search_mode}`)
+    }
+
+    // Add filters to the query
+    if (filters.length > 0) {
+      enhancedQuery += `\n\nFilters: ${filters.join(', ')}`
+    }
+
+    const userMessage = createUserMessage(enhancedQuery)
     const messages = [userMessage]
 
     // Use the SEARCH_TOOLS directly instead of filtering from toolUseContext.options.tools
@@ -80,11 +130,14 @@ export const DispatchTool = {
       },
     }
 
+    // Add additional context about the codebase structure
+    const context = await getContext()
+
     const lastResponse = await lastX(
       query(
         messages,
         [SYSTEM_PROMPT],
-        await getContext(),
+        context,
         dispatchCanUseTool,
         modifiedContext,
       ),
@@ -102,12 +155,95 @@ export const DispatchTool = {
     // Extract the text content from the assistant's response
     const responseText = data.map(item => item.text).join('\n')
 
+    // Process the response to enhance it with additional context
+    let processedResponse = responseText
+
+    // If include_dependencies is true, try to enhance the response with dependency information
+    if (include_dependencies && responseText.includes("Path:")) {
+      // Extract file paths from the response
+      const filePathRegex = /Path:\s*([^\n]+)/g
+      const filePaths: string[] = []
+      let match
+
+      while ((match = filePathRegex.exec(responseText)) !== null) {
+        if (match[1]) {
+          filePaths.push(match[1].trim())
+        }
+      }
+
+      // Add dependency information for each file
+      for (const filePath of filePaths) {
+        try {
+          const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(getCwd(), filePath)
+          if (fs.existsSync(fullPath)) {
+            const fileContent = fs.readFileSync(fullPath, 'utf-8')
+
+            // Get dependency information
+            const { imports, exports } = getDependencyInfo(fullPath, fileContent)
+
+            // Use improved chunking to get better code structure information
+            const chunks = chunkCodeByStructure(fullPath, fileContent)
+
+            // Create dependency section
+            let dependencyInfo = '\n\nDependencies:';
+            if (imports.length > 0) {
+              dependencyInfo += `\nImports: ${imports.join(', ')}`
+            }
+            if (exports.length > 0) {
+              dependencyInfo += `\nExports: ${exports.join(', ')}`
+            }
+
+            // Add structure information in a more concise format
+            if (chunks.length > 0) {
+              dependencyInfo += '\nStructure:'
+
+              // Group chunks by type for better organization
+              const groupedChunks = chunks.reduce((acc, chunk) => {
+                const type = chunk.type
+                if (!acc[type]) acc[type] = []
+                acc[type].push(chunk)
+                return acc
+              }, {} as Record<string, typeof chunks>)
+
+              // Add each type of chunk to the dependency info
+              Object.entries(groupedChunks).forEach(([type, typeChunks]) => {
+                if (type !== 'imports' && typeChunks.length > 0) {
+                  dependencyInfo += `\n  ${type}s (${typeChunks.length}):`
+                  typeChunks.forEach(chunk => {
+                    let chunkInfo = `\n    - ${chunk.name}`
+                    if (chunk.metadata.parentName) {
+                      chunkInfo += ` (in ${chunk.metadata.parentName})`
+                    }
+                    chunkInfo += ` (lines ${chunk.startLine}-${chunk.endLine})`
+                    dependencyInfo += chunkInfo
+                  })
+                }
+              })
+            }
+
+            // Add dependency information to the response
+            processedResponse = processedResponse.replace(
+              new RegExp(`(Path:\s*${filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^]*?)(?=Path:|$)`, 's'),
+              `$1${dependencyInfo}\n\n`
+            )
+          }
+        } catch (error) {
+          console.error(`Error processing dependencies for ${filePath}:`, error)
+        }
+      }
+    }
+
     // If the response already has the expected format, use it directly
     if (responseText.includes("Path:")) {
-      formattedResponse = responseText
+      formattedResponse = processedResponse
     } else {
       // Otherwise, wrap it in our format
-      formattedResponse += responseText
+      formattedResponse += processedResponse
+    }
+
+    // Add a note about filters if they were applied
+    if (filters.length > 0) {
+      formattedResponse = `Search filters applied: ${filters.join(', ')}\n\n${formattedResponse}`
     }
 
     yield {
@@ -122,8 +258,26 @@ export const DispatchTool = {
   renderResultForAssistant(data) {
     return data
   },
-  renderToolUseMessage({ information_request }) {
-    return `information_request: "${information_request}"`
+  renderToolUseMessage({ information_request, file_type, directory, include_dependencies, max_results, search_mode }) {
+    let message = `information_request: "${information_request}"`
+
+    if (file_type) {
+      message += `, file_type: "${file_type}"`
+    }
+    if (directory) {
+      message += `, directory: "${directory}"`
+    }
+    if (include_dependencies) {
+      message += `, include_dependencies: ${include_dependencies}`
+    }
+    if (max_results) {
+      message += `, max_results: ${max_results}`
+    }
+    if (search_mode) {
+      message += `, search_mode: "${search_mode}"`
+    }
+
+    return message
   },
   renderToolResultMessage(content) {
     return (
