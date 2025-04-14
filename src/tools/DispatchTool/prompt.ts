@@ -1,22 +1,19 @@
 // Tool name is imported in DispatchTool.tsx
 
 export const DESCRIPTION = `
-- Advanced codebase search and context retrieval tool that helps you understand code structure and find root causes of issues
-- Searches through the codebase to find relevant code snippets based on natural language queries
-- Combines file pattern matching, content searching, and code structure analysis to find exactly what you need
-- Returns results in a structured format with file paths and actual code snippets
-- Formats output similar to a context engine with multiple relevant results
-- Understands code relationships and dependencies to provide comprehensive context
-- IMPORTANT: This tool is for INFORMATION RETRIEVAL ONLY. It will not fix problems or implement solutions.
+- Advanced code search tool that finds and explains relevant code snippets
+- Uses natural language queries to search across your codebase
+- Combines pattern matching and code analysis to find what you need
+- Returns structured results with file paths and code snippets
+- IMPORTANT: For INFORMATION RETRIEVAL ONLY - does not fix or implement code
 - USE THIS TOOL WHEN:
-  - You need to find the root cause of an issue or bug
-  - You need to understand how a feature is implemented
-  - You need to explore code structure or relationships between components
-  - You need to find specific implementations or patterns in the code
-  - You're working with unfamiliar parts of the codebase
-  - You need to search for specific functions, classes, or variables
-  - You need to understand dependencies between different parts of the code
-  - You want to find semantically similar code across the codebase
+  - Finding the root cause of an issue
+  - Understanding how a feature works
+  - Exploring code structure and relationships
+  - Looking for specific implementations
+  - Working with unfamiliar code
+  - Searching for functions, classes, or variables
+  - Understanding dependencies between components
 `
 
 export const SYSTEM_PROMPT = `
