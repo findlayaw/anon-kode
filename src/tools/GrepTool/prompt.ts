@@ -8,4 +8,5 @@ export const DESCRIPTION = `
 - Returns matching file paths sorted by modification time
 - Use this tool when you need to find files containing specific patterns
 - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead
+- When you need to find the root cause of an issue or understand code structure, use the CodeContextTool instead - it will search and read files for you
 `

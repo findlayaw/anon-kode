@@ -15,6 +15,7 @@ import { setCwd } from '../utils/state'
 import { getSlowAndCapableModel } from '../utils/model'
 import { logError } from '../utils/log'
 import { BashTool } from '../tools/BashTool/BashTool'
+import { DispatchTool } from '../tools/DispatchTool/DispatchTool'
 import { GlobTool } from '../tools/GlobTool/GlobTool'
 import { GrepTool } from '../tools/GrepTool/GrepTool'
 import { MACRO } from '../constants/macros'
@@ -45,8 +46,9 @@ const MCP_COMMANDS: Command[] = [review]
 // - NotebookEditTool
 // - ThinkTool
 const MCP_TOOLS: Tool[] = [
-  AgentTool,
+  // AgentTool, // Disabled in favor of CodeContextTool
   BashTool,
+  DispatchTool,
   GlobTool,
   GrepTool,
 ]

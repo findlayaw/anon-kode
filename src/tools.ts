@@ -2,6 +2,7 @@ import { Tool } from './Tool'
 import { AgentTool } from './tools/AgentTool/AgentTool'
 import { ArchitectTool } from './tools/ArchitectTool/ArchitectTool'
 import { BashTool } from './tools/BashTool/BashTool'
+import { DispatchTool } from './tools/DispatchTool/DispatchTool'
 import { FileEditTool } from './tools/FileEditTool/FileEditTool'
 import { FileReadTool } from './tools/FileReadTool/FileReadTool'
 import { FileWriteTool } from './tools/FileWriteTool/FileWriteTool'
@@ -21,8 +22,9 @@ const ANT_ONLY_TOOLS = [MemoryReadTool, MemoryWriteTool]
 // Function to avoid circular dependencies that break bun
 export const getAllTools = (): Tool[] => {
   return [
-    AgentTool,
+    AgentTool, // Disabled via isEnabled() in favor of CodeContextTool
     BashTool,
+    DispatchTool, // Renamed to CodeContextTool
     GlobTool,
     GrepTool,
     LSTool,

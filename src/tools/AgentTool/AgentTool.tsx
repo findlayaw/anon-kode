@@ -187,7 +187,8 @@ export const AgentTool = {
     return true // for now...
   },
   async isEnabled() {
-    return true
+    // Disabled in favor of CodeContextTool
+    return false
   },
   userFacingName() {
     return 'Task'

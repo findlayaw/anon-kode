@@ -25,6 +25,7 @@ export async function getPrompt(
 - If you are searching for a keyword like "config" or "logger", the Agent tool is appropriate
 - If you want to read a specific file path, use the ${FileReadTool.name} or ${GlobTool.name} tool instead of the Agent tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use the ${GlobTool.name} tool instead, to find the match more quickly
+- If you need to find the root cause of an issue or understand code structure, use the CodeContextTool instead - it's specifically designed to search through the codebase and provide relevant code snippets with context
 
 IMPORTANT: While you have access to all tools, any destructive operations (delete, remove, format) are strictly forbidden and will be blocked. You can create, modify, and read files, but cannot delete them.
 
