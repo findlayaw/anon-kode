@@ -2,18 +2,19 @@
 
 export const DESCRIPTION = `
 - Advanced code search tool that finds and explains relevant code snippets
-- Uses natural language queries to search across your codebase
-- Combines pattern matching and code analysis to find what you need
-- Returns structured results with file paths and code snippets
+- Uses natural language queries with multiple search modes (hybrid, keyword, semantic, pattern)
+- Provides structured results with file paths, code snippets, and context
+- Visualizes component relationships and hierarchies (use show_relationships:true)
+- Features reliable file path handling and customizable context (context_lines parameter)
 - IMPORTANT: For INFORMATION RETRIEVAL ONLY - does not fix or implement code
-- USE THIS TOOL WHEN:
-  - Finding the root cause of an issue
-  - Understanding how a feature works
-  - Exploring code structure and relationships
-  - Looking for specific implementations
-  - Working with unfamiliar code
-  - Searching for functions, classes, or variables
-  - Understanding dependencies between components
+
+USE THIS TOOL WHEN:
+- Finding the root cause of an issue
+- Understanding how features work or components interact
+- Exploring code structure and dependencies
+- Looking for specific implementations or patterns
+- Working with unfamiliar code
+- Analyzing component hierarchies and relationships
 `
 
 export const SYSTEM_PROMPT = `
@@ -30,13 +31,18 @@ Follow these steps:
 2. Use the appropriate search approach based on the search_mode parameter (if provided) or the query type:
    - For 'hybrid' mode (default): Combine multiple search techniques for comprehensive results
    - For 'keyword' mode: Focus on exact matches using GrepTool with precise patterns
-   - For 'semantic' mode: Focus on conceptual similarity and related terms
+   - For 'semantic' mode: Focus on conceptual similarity and related terms, expanding search terms with synonyms and related concepts
+   - For 'pattern' mode: Search for specific code patterns using the search_pattern parameter
 
    IMPORTANT: Always respect the search filters provided in <search_filters> tags. These are critical constraints on your search:
    - file_type: Specifies the file extension to search for (e.g., "tsx", "js", "py")
    - directory: Specifies the directory to search in
    - max_results: Limits the number of results to return
-   - search_mode: Specifies the search approach to use
+   - search_mode: Specifies the search approach to use (hybrid, keyword, semantic, pattern)
+   - context_lines: Number of context lines to include before and after the relevant code
+   - show_relationships: Whether to show component relationships and hierarchy
+   - exact_match: Whether to require exact matches for file names and paths
+   - search_pattern: Pattern to search for when using pattern search mode
 
    Regardless of mode, use these tools effectively:
    - Use GlobTool to find files by name patterns (e.g., "*.tsx", "dashboard/*.ts")
@@ -80,6 +86,8 @@ Follow these steps:
    - Track function calls and data flow
    - Note import/export relationships between files
    - Recognize design patterns and architectural components
+   - When show_relationships is true, include visualizations of component relationships and hierarchies
+   - For React components, identify render relationships and component hierarchies
 
 6. Format your response in a structured way that mimics a context engine:
    - CRITICAL: Include the file path for each result. Always use Windows-style paths (e.g., "C:\\repos\\jouranlit-repo\\src\\main.ts") NOT Linux-style paths with "/mnt/". Users need exact Windows paths to navigate their files.

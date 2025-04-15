@@ -21,7 +21,8 @@ import path from 'path'
 import fs from 'fs'
 import { parseCodeStructure, extractCodeChunks, getDependencyInfo } from './codeParser'
 import { chunkCodeByStructure } from './chunking'
-import { convertWindowsPathToWSL, convertWSLPathToWindows, isRunningInWSL, findDirectoryWithCorrectCase } from '../../utils/file'
+import { buildDependencyGraph, visualizeComponentRelationships, visualizeComponentHierarchy } from './dependencyGraph'
+import { convertWindowsPathToWSL, convertWSLPathToWindows, isRunningInWSL, findDirectoryWithCorrectCase, findFileWithCorrectCase, findPathWithCorrectCase } from '../../utils/file'
 
 const inputSchema = z.strictObject({
   information_request: z
@@ -44,8 +45,24 @@ const inputSchema = z.strictObject({
     .describe('Maximum number of results to return')
     .optional(),
   search_mode: z
-    .enum(['hybrid', 'keyword', 'semantic'])
-    .describe('Search mode to use: hybrid (default), keyword, or semantic')
+    .enum(['hybrid', 'keyword', 'semantic', 'pattern'])
+    .describe('Search mode to use: hybrid (default), keyword, semantic, or pattern-based')
+    .optional(),
+  context_lines: z
+    .number()
+    .describe('Number of context lines to include before and after the relevant code (default: 5)')
+    .optional(),
+  show_relationships: z
+    .boolean()
+    .describe('Whether to show component relationships and hierarchy')
+    .optional(),
+  exact_match: z
+    .boolean()
+    .describe('Whether to require exact matches for file names and paths')
+    .optional(),
+  search_pattern: z
+    .string()
+    .describe('Pattern to search for when using pattern search mode')
     .optional()
 })
 
@@ -75,7 +92,7 @@ export const DispatchTool = {
   needsPermissions() {
     return false
   },
-  async *call({ information_request, file_type, directory, include_dependencies, max_results, search_mode = 'hybrid' }, toolUseContext, canUseTool) {
+  async *call({ information_request, file_type, directory, include_dependencies, max_results, search_mode = 'hybrid', context_lines = 5, show_relationships = false, exact_match = false, search_pattern }, toolUseContext, canUseTool) {
     // Ensure we have read permissions for the filesystem
     grantReadPermissionForOriginalDir()
 
@@ -103,6 +120,18 @@ export const DispatchTool = {
     }
     if (search_mode) {
       filters.push(`search_mode:${search_mode}`)
+    }
+    if (context_lines) {
+      filters.push(`context_lines:${context_lines}`)
+    }
+    if (show_relationships) {
+      filters.push(`show_relationships:true`)
+    }
+    if (exact_match) {
+      filters.push(`exact_match:true`)
+    }
+    if (search_pattern) {
+      filters.push(`search_pattern:"${search_pattern}"`)
     }
 
     // Add filters to the query in a more structured format
@@ -290,25 +319,19 @@ export const DispatchTool = {
             try {
               // Get the full path to the file
               const filePath = path.join(cwd, suggestedFiles[0]);
-              const dirWithCorrectCase = findDirectoryWithCorrectCase(path.dirname(filePath));
 
-              if (dirWithCorrectCase) {
-                // Try to find the file with case-insensitive matching
-                const files = fs.readdirSync(dirWithCorrectCase);
-                const matchingFile = files.find(file =>
-                  file.toLowerCase() === path.basename(filePath).toLowerCase());
+              // Use our improved file path handling
+              const fileWithCorrectCase = findFileWithCorrectCase(filePath);
 
-                if (matchingFile) {
-                  const actualFilePath = path.join(dirWithCorrectCase, matchingFile);
-                  const fileContent = fs.readFileSync(actualFilePath, 'utf-8');
+              if (fileWithCorrectCase) {
+                const fileContent = fs.readFileSync(fileWithCorrectCase, 'utf-8');
 
-                  // Add this file to the response for the LLM to analyze
-                  formattedResponse = `The following code sections were retrieved:\nPath: ${suggestedFiles[0]}\n${fileContent}\n`;
+                // Add this file to the response for the LLM to analyze
+                formattedResponse = `The following code sections were retrieved:\nPath: ${suggestedFiles[0]}\n${fileContent}\n`;
 
-                  // Continue with normal processing instead of returning early
-                  processedResponse = formattedResponse;
-                  fileReadSuccess = true;
-                }
+                // Continue with normal processing instead of returning early
+                processedResponse = formattedResponse;
+                fileReadSuccess = true;
               }
             } catch (error) {
               console.error(`Error reading file: ${error}`);
@@ -406,8 +429,8 @@ export const DispatchTool = {
       })
     }
 
-    // If include_dependencies is true, try to enhance the response with dependency information
-    if (include_dependencies && responseText.includes("Path:")) {
+    // If include_dependencies or show_relationships is true, try to enhance the response with additional information
+    if ((include_dependencies || show_relationships) && responseText.includes("Path:")) {
       try {
         // Extract file paths from the response
         const filePathRegex = /Path:\s*([^\n]+)/g
@@ -417,6 +440,25 @@ export const DispatchTool = {
         while ((match = filePathRegex.exec(responseText)) !== null) {
           if (match[1]) {
             filePaths.push(match[1].trim())
+          }
+        }
+
+        // If show_relationships is true, build and visualize component relationships
+        if (show_relationships && filePaths.length > 0) {
+          try {
+            // Build dependency graph from the files
+            const { relationships } = buildDependencyGraph(filePaths)
+
+            if (relationships.length > 0) {
+              // Generate visualizations
+              const relationshipsVisualization = visualizeComponentRelationships(relationships)
+              const hierarchyVisualization = visualizeComponentHierarchy(relationships)
+
+              // Add visualizations to the response
+              processedResponse = processedResponse + "\n\n" + relationshipsVisualization + "\n\n" + hierarchyVisualization
+            }
+          } catch (error) {
+            console.error('Error generating relationship visualizations:', error)
           }
         }
 
@@ -435,31 +477,17 @@ export const DispatchTool = {
 
             // Try to find the file with case-insensitive matching if it doesn't exist
             if (!fs.existsSync(fullPath)) {
-              // Get the directory and filename
-              const dir = path.dirname(fullPath)
-              const basename = path.basename(fullPath)
+              // Use our improved file path handling
+              const fileWithCorrectCase = findFileWithCorrectCase(fullPath)
 
-              // Try to find the directory with case-insensitive matching
-              const dirWithCorrectCase = findDirectoryWithCorrectCase(dir)
-
-              if (dirWithCorrectCase) {
-                // Try to find a case-insensitive match for the file
-                const files = fs.readdirSync(dirWithCorrectCase)
-                const matchingFile = files.find(file => file.toLowerCase() === basename.toLowerCase())
-
-                if (matchingFile) {
-                  // Use the actual filename with correct case
-                  actualFilePath = path.join(dirWithCorrectCase, matchingFile)
-                  fileContent = fs.readFileSync(actualFilePath, 'utf-8')
-                  console.log(`Found file with correct case: ${actualFilePath} (original: ${fullPath})`)
-                } else {
-                  // If we get here, the file wasn't found even with case-insensitive matching
-                  console.error(`File not found: ${fullPath} (directory exists with correct case: ${dirWithCorrectCase})`)
-                  continue // Skip to next file
-                }
+              if (fileWithCorrectCase) {
+                // Use the file with correct case
+                actualFilePath = fileWithCorrectCase
+                fileContent = fs.readFileSync(actualFilePath, 'utf-8')
+                console.log(`Found file with correct case: ${actualFilePath} (original: ${fullPath})`)
               } else {
-                // Directory doesn't exist even with case-insensitive matching
-                console.error(`Directory not found with any case variation: ${dir}`)
+                // If we get here, the file wasn't found even with case-insensitive matching
+                console.error(`File not found: ${fullPath} (tried case-insensitive matching)`)
                 continue // Skip to next file
               }
             } else {
@@ -470,8 +498,8 @@ export const DispatchTool = {
             // Get dependency information
             const { imports, exports } = getDependencyInfo(actualFilePath, fileContent)
 
-            // Use improved chunking to get better code structure information
-            const chunks = chunkCodeByStructure(actualFilePath, fileContent)
+            // Use improved chunking to get better code structure information with context lines
+            const chunks = chunkCodeByStructure(actualFilePath, fileContent, context_lines)
 
             // Create dependency section
             let dependencyInfo = '\n\nDependencies:'
@@ -604,7 +632,7 @@ export const DispatchTool = {
   renderResultForAssistant(data) {
     return data
   },
-  renderToolUseMessage({ information_request, file_type, directory, include_dependencies, max_results, search_mode }) {
+  renderToolUseMessage({ information_request, file_type, directory, include_dependencies, max_results, search_mode, context_lines, show_relationships, exact_match, search_pattern }) {
     let message = `information_request: "${information_request}"`
 
     if (file_type) {
@@ -621,6 +649,18 @@ export const DispatchTool = {
     }
     if (search_mode) {
       message += `, search_mode: "${search_mode}"`
+    }
+    if (context_lines) {
+      message += `, context_lines: ${context_lines}`
+    }
+    if (show_relationships) {
+      message += `, show_relationships: ${show_relationships}`
+    }
+    if (exact_match) {
+      message += `, exact_match: ${exact_match}`
+    }
+    if (search_pattern) {
+      message += `, search_pattern: "${search_pattern}"`
     }
 
     return message

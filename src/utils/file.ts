@@ -505,6 +505,64 @@ export function findDirectoryWithCorrectCase(dirPath: string): string | undefine
 }
 
 /**
+ * Find a file with case-insensitive matching
+ * @param filePath The path to the file to find
+ * @returns The actual file path with correct case, or undefined if not found
+ */
+export function findFileWithCorrectCase(filePath: string): string | undefined {
+  try {
+    // If the file exists with the exact path, return it
+    if (existsSync(filePath)) {
+      return filePath
+    }
+
+    // Try to find the directory with case-insensitive matching
+    const dirPath = dirname(filePath)
+    const fileName = basename(filePath)
+
+    // First check if parent directory exists with correct case
+    const dirWithCorrectCase = findDirectoryWithCorrectCase(dirPath)
+
+    if (!dirWithCorrectCase) {
+      return undefined
+    }
+
+    // Now look for the file with case-insensitive matching
+    const entries = readdirSync(dirWithCorrectCase)
+    const matchingEntry = entries.find(
+      entry => entry.toLowerCase() === fileName.toLowerCase() &&
+              existsSync(join(dirWithCorrectCase, entry)) &&
+              !statSync(join(dirWithCorrectCase, entry)).isDirectory()
+    )
+
+    if (matchingEntry) {
+      return join(dirWithCorrectCase, matchingEntry)
+    }
+
+    return undefined
+  } catch (error) {
+    logError(`Error finding file with correct case for ${filePath}: ${error}`)
+    return undefined
+  }
+}
+
+/**
+ * Find a file or directory with case-insensitive matching
+ * @param path The path to find
+ * @returns The actual path with correct case, or undefined if not found
+ */
+export function findPathWithCorrectCase(path: string): string | undefined {
+  // First try as a file
+  const fileWithCorrectCase = findFileWithCorrectCase(path)
+  if (fileWithCorrectCase) {
+    return fileWithCorrectCase
+  }
+
+  // Then try as a directory
+  return findDirectoryWithCorrectCase(path)
+}
+
+/**
  * Checks if a directory is empty by efficiently reading just the first entry
  * @param dirPath The path to the directory to check
  * @returns true if the directory is empty, false otherwise
