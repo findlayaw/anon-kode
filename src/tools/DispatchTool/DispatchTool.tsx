@@ -21,6 +21,7 @@ import path from 'path'
 import fs from 'fs'
 import { parseCodeStructure, extractCodeChunks, getDependencyInfo } from './codeParser'
 import { chunkCodeByStructure } from './chunking'
+import { convertWindowsPathToWSL, convertWSLPathToWindows, isRunningInWSL, findDirectoryWithCorrectCase } from '../../utils/file'
 
 const inputSchema = z.strictObject({
   information_request: z
@@ -87,7 +88,12 @@ export const DispatchTool = {
       filters.push(`file_type:${file_type}`)
     }
     if (directory) {
-      filters.push(`directory:${directory}`)
+      // Convert Windows path to WSL path if needed
+      let directoryPath = directory
+      if (isRunningInWSL() && directory.match(/^[a-zA-Z]:\\?/)) {
+        directoryPath = convertWindowsPathToWSL(directory)
+      }
+      filters.push(`directory:${directoryPath}`)
     }
     if (include_dependencies) {
       filters.push('include_dependencies:true')
@@ -99,9 +105,9 @@ export const DispatchTool = {
       filters.push(`search_mode:${search_mode}`)
     }
 
-    // Add filters to the query
+    // Add filters to the query in a more structured format
     if (filters.length > 0) {
-      enhancedQuery += `\n\nFilters: ${filters.join(', ')}`
+      enhancedQuery += `\n\n<search_filters>\n${filters.join('\n')}\n</search_filters>\n\nIMPORTANT: Use the above filters when searching. The file_type filter specifies the extension of files to search for (e.g., "tsx", "js"). The directory filter specifies where to look for files.`
     }
 
     // Add a hint to check specific directories if they're mentioned in the query
@@ -165,6 +171,9 @@ export const DispatchTool = {
     // Extract the text content from the assistant's response
     const responseText = data.map(item => item.text).join('\n')
 
+    // Define processedResponse at the top level of the function
+    let processedResponse: string | undefined = undefined
+
     // Check if the response indicates no results or errors
     const noResultsIndicators = [
       "unable to find", "couldn't find", "could not find",
@@ -180,10 +189,72 @@ export const DispatchTool = {
     if (hasNoResults) {
       // Try to find files using GlobTool directly
       try {
-        const cwd = getCwd();
+        // Get current working directory and handle Windows paths if needed
+        let cwd = getCwd();
+        if (isRunningInWSL() && cwd.match(/^[a-zA-Z]:\\?/)) {
+          cwd = convertWindowsPathToWSL(cwd);
+        }
         let suggestedFiles = [];
 
-        // Look for dashboard components
+        // Look for files related to the query
+        // First, try to extract potential file names from the information_request
+        const fileNameMatches = information_request.match(/\b([A-Za-z]+(?:View|Form|Component|Page|Modal|Dialog)[A-Za-z]*)\b/g);
+
+        if (fileNameMatches && fileNameMatches.length > 0) {
+          // For each potential file name, try to find it in the codebase
+          for (const potentialFileName of fileNameMatches) {
+            // Try common directories
+            const commonDirs = ['src/views', 'src/components', 'src/pages', 'src/forms'];
+
+            for (const dir of commonDirs) {
+              const dirPath = path.join(cwd, dir);
+
+              // Try to find the directory with case-insensitive matching
+              const dirWithCorrectCase = findDirectoryWithCorrectCase(dirPath);
+
+              if (dirWithCorrectCase) {
+                // Get all files in the directory
+                const files = fs.readdirSync(dirWithCorrectCase);
+
+                // Look for case-insensitive matches
+                const matchingFiles = files.filter(file =>
+                  file.toLowerCase().includes(potentialFileName.toLowerCase()));
+
+                if (matchingFiles.length > 0) {
+                  console.log(`Found ${matchingFiles.length} files matching '${potentialFileName}' in directory: ${dirWithCorrectCase}`);
+                  suggestedFiles.push(...matchingFiles.map(f => `${dir}/${f}`));
+                }
+              } else {
+                // Try to find a similar directory
+                const parentDir = path.dirname(dirPath);
+                if (fs.existsSync(parentDir)) {
+                  const dirs = fs.readdirSync(parentDir);
+                  const similarDirs = dirs.filter(d =>
+                    fs.statSync(path.join(parentDir, d)).isDirectory() &&
+                    d.toLowerCase().includes(path.basename(dir).toLowerCase()));
+
+                  if (similarDirs.length > 0) {
+                    console.log(`Directory '${dir}' not found, but found similar directories: ${similarDirs.join(', ')}`);
+                    // Check these similar directories for matching files
+                    for (const similarDir of similarDirs) {
+                      const similarDirPath = path.join(parentDir, similarDir);
+                      const files = fs.readdirSync(similarDirPath);
+                      const matchingFiles = files.filter(file =>
+                        file.toLowerCase().includes(potentialFileName.toLowerCase()));
+
+                      if (matchingFiles.length > 0) {
+                        const relativePath = path.join(path.relative(cwd, parentDir), similarDir);
+                        suggestedFiles.push(...matchingFiles.map(f => `${relativePath}/${f}`));
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Look for dashboard components as before
         if (information_request.toLowerCase().includes('dashboard')) {
           const dashboardFiles = fs.existsSync(path.join(cwd, 'src/components/dashboard')) ?
             fs.readdirSync(path.join(cwd, 'src/components/dashboard')) : [];
@@ -206,13 +277,110 @@ export const DispatchTool = {
         }
 
         if (suggestedFiles.length > 0) {
-          formattedResponse = `I found some potentially relevant files that might help with your query:\n\n`;
-          suggestedFiles.forEach(file => {
-            formattedResponse += `- ${file}\n`;
-          });
-          formattedResponse += `\nPlease try a more specific query targeting one of these files.`;
+          // If we found exactly one file and it matches what the user is looking for,
+          // let's read it and analyze it instead of just suggesting it
+          if (suggestedFiles.length === 1 &&
+              information_request.toLowerCase().includes(path.basename(suggestedFiles[0]).toLowerCase())) {
 
-          // Return early with the suggestions
+            console.log(`Found exact file match: ${suggestedFiles[0]}. Reading and analyzing it...`);
+
+            // Flag to track if we successfully read the file
+            let fileReadSuccess = false;
+
+            try {
+              // Get the full path to the file
+              const filePath = path.join(cwd, suggestedFiles[0]);
+              const dirWithCorrectCase = findDirectoryWithCorrectCase(path.dirname(filePath));
+
+              if (dirWithCorrectCase) {
+                // Try to find the file with case-insensitive matching
+                const files = fs.readdirSync(dirWithCorrectCase);
+                const matchingFile = files.find(file =>
+                  file.toLowerCase() === path.basename(filePath).toLowerCase());
+
+                if (matchingFile) {
+                  const actualFilePath = path.join(dirWithCorrectCase, matchingFile);
+                  const fileContent = fs.readFileSync(actualFilePath, 'utf-8');
+
+                  // Add this file to the response for the LLM to analyze
+                  formattedResponse = `The following code sections were retrieved:\nPath: ${suggestedFiles[0]}\n${fileContent}\n`;
+
+                  // Continue with normal processing instead of returning early
+                  processedResponse = formattedResponse;
+                  fileReadSuccess = true;
+                }
+              }
+            } catch (error) {
+              console.error(`Error reading file: ${error}`);
+              // Fall back to just suggesting the file
+            }
+
+            // If we successfully read the file, we'll return early
+            if (fileReadSuccess) {
+              // Return early with the file content
+              yield {
+                type: 'result',
+                data: [{ type: 'text', text: formattedResponse }],
+                resultForAssistant: formattedResponse,
+              };
+              return;
+            }
+          }
+
+          // If we didn't read and analyze the file above, just suggest the files
+          if (!processedResponse) {
+            formattedResponse = `I found some potentially relevant files that might help with your query:\n\n`;
+            suggestedFiles.forEach(file => {
+              formattedResponse += `- ${file}\n`;
+            });
+            formattedResponse += `\nPlease try a more specific query targeting one of these files.`;
+
+            // Return early with the suggestions
+            yield {
+              type: 'result',
+              data: [{ type: 'text', text: formattedResponse }],
+              resultForAssistant: formattedResponse,
+            };
+            return;
+          }
+        } else {
+          // No files found, provide a more helpful error message
+          formattedResponse = `I couldn't find any files matching your query. This could be due to:\n\n`;
+          formattedResponse += `1. The file might exist with a different case than expected (e.g., 'TradeFormView.tsx' vs 'tradeformview.tsx')\n`;
+          formattedResponse += `2. The file might be in a different directory than the ones I searched\n`;
+          formattedResponse += `3. The file might have a slightly different name than what was extracted from your query\n\n`;
+
+          // Extract what we were looking for to make the message more helpful
+          if (fileNameMatches && fileNameMatches.length > 0) {
+            formattedResponse += `I was looking for files containing: ${fileNameMatches.join(', ')}\n\n`;
+          }
+
+          // Add information about the search filters that were applied
+          if (filters.length > 0) {
+            formattedResponse += `Search filters applied:\n`;
+            filters.forEach(filter => {
+              formattedResponse += `- ${filter}\n`;
+            });
+            formattedResponse += `\n`;
+          }
+
+          // Add specific advice for file_type filter
+          if (file_type) {
+            formattedResponse += `Note: I was specifically looking for files with the extension '${file_type}'. `;
+            formattedResponse += `If the file exists with a different extension, try removing the file_type filter or changing it.\n\n`;
+          }
+
+          // Add specific advice for directory filter
+          if (directory) {
+            formattedResponse += `Note: I was specifically looking in the directory '${directory}'. `;
+            formattedResponse += `If the file exists in a different directory, try removing the directory filter or changing it.\n\n`;
+          }
+
+          formattedResponse += `Try one of these approaches:\n`;
+          formattedResponse += `- Provide the exact file path if you know it\n`;
+          formattedResponse += `- Use a more general search term\n`;
+          formattedResponse += `- Specify a different directory to search in\n`;
+
           yield {
             type: 'result',
             data: [{ type: 'text', text: formattedResponse }],
@@ -226,36 +394,87 @@ export const DispatchTool = {
     }
 
     // Process the response to enhance it with additional context
-    let processedResponse = responseText
+    // Use the processedResponse variable defined earlier
+    processedResponse = processedResponse || responseText
+
+    // Convert any WSL paths in the response back to Windows paths
+    if (isRunningInWSL()) {
+      // Find paths like /mnt/c/... and convert them to C:\...
+      const wslPathRegex = /\/mnt\/([a-z])\/([^\s"'<>]+)/g
+      processedResponse = processedResponse.replace(wslPathRegex, (match, driveLetter, remainingPath) => {
+        return `${driveLetter.toUpperCase()}:\\${remainingPath.replace(/\//g, '\\')}`
+      })
+    }
 
     // If include_dependencies is true, try to enhance the response with dependency information
     if (include_dependencies && responseText.includes("Path:")) {
-      // Extract file paths from the response
-      const filePathRegex = /Path:\s*([^\n]+)/g
-      const filePaths: string[] = []
-      let match
+      try {
+        // Extract file paths from the response
+        const filePathRegex = /Path:\s*([^\n]+)/g
+        const filePaths: string[] = []
+        let match
 
-      while ((match = filePathRegex.exec(responseText)) !== null) {
-        if (match[1]) {
-          filePaths.push(match[1].trim())
+        while ((match = filePathRegex.exec(responseText)) !== null) {
+          if (match[1]) {
+            filePaths.push(match[1].trim())
+          }
         }
-      }
 
-      // Add dependency information for each file
-      for (const filePath of filePaths) {
-        try {
-          const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(getCwd(), filePath)
-          if (fs.existsSync(fullPath)) {
-            const fileContent = fs.readFileSync(fullPath, 'utf-8')
+        // Process each file path
+        for (const filePath of filePaths) {
+          try {
+            // Handle Windows paths if running in WSL
+            let normalizedPath = filePath
+            if (isRunningInWSL() && filePath.match(/^[a-zA-Z]:\\?/)) {
+              normalizedPath = convertWindowsPathToWSL(filePath)
+            }
+
+            const fullPath = path.isAbsolute(normalizedPath) ? normalizedPath : path.resolve(getCwd(), normalizedPath)
+            let actualFilePath = fullPath
+            let fileContent = ''
+
+            // Try to find the file with case-insensitive matching if it doesn't exist
+            if (!fs.existsSync(fullPath)) {
+              // Get the directory and filename
+              const dir = path.dirname(fullPath)
+              const basename = path.basename(fullPath)
+
+              // Try to find the directory with case-insensitive matching
+              const dirWithCorrectCase = findDirectoryWithCorrectCase(dir)
+
+              if (dirWithCorrectCase) {
+                // Try to find a case-insensitive match for the file
+                const files = fs.readdirSync(dirWithCorrectCase)
+                const matchingFile = files.find(file => file.toLowerCase() === basename.toLowerCase())
+
+                if (matchingFile) {
+                  // Use the actual filename with correct case
+                  actualFilePath = path.join(dirWithCorrectCase, matchingFile)
+                  fileContent = fs.readFileSync(actualFilePath, 'utf-8')
+                  console.log(`Found file with correct case: ${actualFilePath} (original: ${fullPath})`)
+                } else {
+                  // If we get here, the file wasn't found even with case-insensitive matching
+                  console.error(`File not found: ${fullPath} (directory exists with correct case: ${dirWithCorrectCase})`)
+                  continue // Skip to next file
+                }
+              } else {
+                // Directory doesn't exist even with case-insensitive matching
+                console.error(`Directory not found with any case variation: ${dir}`)
+                continue // Skip to next file
+              }
+            } else {
+              // File exists with the exact path
+              fileContent = fs.readFileSync(fullPath, 'utf-8')
+            }
 
             // Get dependency information
-            const { imports, exports } = getDependencyInfo(fullPath, fileContent)
+            const { imports, exports } = getDependencyInfo(actualFilePath, fileContent)
 
             // Use improved chunking to get better code structure information
-            const chunks = chunkCodeByStructure(fullPath, fileContent)
+            const chunks = chunkCodeByStructure(actualFilePath, fileContent)
 
             // Create dependency section
-            let dependencyInfo = '\n\nDependencies:';
+            let dependencyInfo = '\n\nDependencies:'
             if (imports.length > 0) {
               dependencyInfo += `\nImports: ${imports.join(', ')}`
             }
@@ -296,24 +515,81 @@ export const DispatchTool = {
               new RegExp(`(Path:\s*${filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^]*?)(?=Path:|$)`, 's'),
               `$1${dependencyInfo}\n\n`
             )
+          } catch (fileError) {
+            console.error(`Error processing dependencies for ${filePath}:`, fileError)
           }
-        } catch (error) {
-          console.error(`Error processing dependencies for ${filePath}:`, error)
         }
+      } catch (error) {
+        console.error('Error processing dependencies:', error)
       }
     }
 
     // If the response already has the expected format, use it directly
-    if (responseText.includes("Path:")) {
+    if (responseText.includes("Path:") || processedResponse.includes("Path:")) {
       formattedResponse = processedResponse
     } else {
       // Otherwise, wrap it in our format
       formattedResponse += processedResponse
     }
 
+    // Check if the response is empty or just contains the header
+    if (formattedResponse.trim() === "The following code sections were retrieved:" ||
+        formattedResponse.includes("(no content)")) {
+      console.log("Empty response detected, adding debug information")
+      formattedResponse += "\n\nDebug information:\n"
+      formattedResponse += `- processedResponse length: ${processedResponse?.length || 0}\n`
+      formattedResponse += `- responseText length: ${responseText?.length || 0}\n`
+      formattedResponse += `- filters: ${filters.join(', ')}\n`
+
+      // Try to read the file directly as a last resort
+      if (directory) {
+        try {
+          const dirPath = directory
+          const wslDirPath = isRunningInWSL() ? convertWindowsPathToWSL(dirPath) : dirPath
+          const dirWithCorrectCase = findDirectoryWithCorrectCase(wslDirPath)
+
+          if (dirWithCorrectCase) {
+            console.log(`Found directory with correct case: ${dirWithCorrectCase}`)
+            const files = fs.readdirSync(dirWithCorrectCase)
+            formattedResponse += `\nFiles in directory: ${files.join(', ')}\n`
+
+            // Look for TradeFormView.tsx specifically
+            const tradeFormFile = files.find((file: string) =>
+              file.toLowerCase() === 'tradeformview.tsx')
+
+            if (tradeFormFile) {
+              console.log(`Found TradeFormView.tsx with correct case: ${tradeFormFile}`)
+              const filePath = path.join(dirWithCorrectCase, tradeFormFile)
+              const fileContent = fs.readFileSync(filePath, 'utf-8')
+              formattedResponse = `The following code sections were retrieved:\nPath: ${directory}\\${tradeFormFile}\n${fileContent}\n`
+            }
+          }
+        } catch (error) {
+          console.error(`Error in last resort file reading: ${error}`)
+          formattedResponse += `\nError reading file directly: ${error}\n`
+        }
+      }
+    }
+
     // Add a note about filters if they were applied
     if (filters.length > 0) {
       formattedResponse = `Search filters applied: ${filters.join(', ')}\n\n${formattedResponse}`
+    }
+
+    // Final check to ensure all paths are in Windows format
+    if (isRunningInWSL()) {
+      // Convert any remaining WSL paths to Windows paths
+      const wslPathRegex = /\/mnt\/([a-z])\/([^\s"'<>]+)/g
+      formattedResponse = formattedResponse.replace(wslPathRegex, (match, driveLetter, remainingPath) => {
+        return `${driveLetter.toUpperCase()}:\\${remainingPath.replace(/\//g, '\\')}`
+      })
+
+      // Also convert any directory filters from WSL to Windows format
+      if (formattedResponse.includes('directory:/mnt/')) {
+        formattedResponse = formattedResponse.replace(/directory:\/mnt\/([a-z])\/([^\s,]+)/g, (match, driveLetter, remainingPath) => {
+          return `directory:${driveLetter.toUpperCase()}:\\${remainingPath.replace(/\//g, '\\')}`
+        })
+      }
     }
 
     yield {

@@ -6,6 +6,7 @@ import {
   closeSync,
   existsSync,
   readdirSync,
+  statSync,
 } from 'fs'
 import { logError } from './log'
 import {
@@ -277,7 +278,73 @@ export function detectLineEndingsDirect(
   }
 }
 
+/**
+ * Detects if the current environment is WSL (Windows Subsystem for Linux)
+ * @returns true if running in WSL, false otherwise
+ */
+export function isRunningInWSL(): boolean {
+  try {
+    return (
+      process.platform === 'linux' &&
+      existsSync('/proc/version') &&
+      readFileSync('/proc/version', 'utf-8')
+        .toLowerCase()
+        .includes('microsoft')
+    )
+  } catch (error) {
+    return false
+  }
+}
+
+/**
+ * Converts a Windows-style path to a WSL-compatible path
+ * @param path Windows-style path (e.g., C:\repos\project)
+ * @returns WSL-compatible path (e.g., /mnt/c/repos/project)
+ */
+export function convertWindowsPathToWSL(path: string): string {
+  // Check if it's a Windows-style path (starts with drive letter followed by :)
+  const windowsPathRegex = /^([a-zA-Z]):\\?(.*)/
+  const match = path.match(windowsPathRegex)
+
+  if (match) {
+    const [, driveLetter, remainingPath] = match
+    // Convert to WSL path format: /mnt/c/path
+    // Only convert the drive letter to lowercase, preserve case for the rest of the path
+    const wslPath = `/mnt/${driveLetter.toLowerCase()}/${remainingPath.replace(/\\/g, '/')}`
+    return wslPath
+  }
+
+  // If it's not a Windows path, return as is
+  return path
+}
+
+/**
+ * Converts a WSL path back to a Windows-style path
+ * @param path WSL path (e.g., /mnt/c/repos/project)
+ * @returns Windows-style path (e.g., C:\repos\project)
+ */
+export function convertWSLPathToWindows(path: string): string {
+  // Check if it's a WSL path (starts with /mnt/ followed by a single letter)
+  const wslPathRegex = /^\/mnt\/([a-z])\/(.*)/
+  const match = path.match(wslPathRegex)
+
+  if (match) {
+    const [, driveLetter, remainingPath] = match
+    // Convert to Windows path format: C:\path
+    const windowsPath = `${driveLetter.toUpperCase()}:\\${remainingPath.replace(/\//g, '\\')}`
+    return windowsPath
+  }
+
+  // If it's not a WSL path, return as is
+  return path
+}
+
 export function normalizeFilePath(filePath: string): string {
+  // First check if it's a Windows path and we're in WSL
+  if (isRunningInWSL()) {
+    filePath = convertWindowsPathToWSL(filePath)
+  }
+
   const absoluteFilePath = isAbsolute(filePath)
     ? filePath
     : resolve(getCwd(), filePath)
@@ -302,7 +369,14 @@ export function normalizeFilePath(filePath: string): string {
 }
 
 export function getAbsolutePath(path: string | undefined): string | undefined {
-  return path ? (isAbsolute(path) ? path : resolve(getCwd(), path)) : undefined
+  if (!path) return undefined
+
+  // Convert Windows path to WSL path if needed
+  if (isRunningInWSL()) {
+    path = convertWindowsPathToWSL(path)
+  }
+
+  return isAbsolute(path) ? path : resolve(getCwd(), path)
 }
 
 export function getAbsoluteAndRelativePaths(path: string | undefined): {
@@ -384,6 +458,50 @@ export function addLineNumbers({
       return `${n}\t${line}`
     })
     .join('\n') // TODO: This probably won't work for Windows
+}
+
+/**
+ * Find a directory with case-insensitive matching
+ * @param dirPath The path to the directory to find
+ * @returns The actual directory path with correct case, or undefined if not found
+ */
+export function findDirectoryWithCorrectCase(dirPath: string): string | undefined {
+  try {
+    // If the directory exists with the exact path, return it
+    if (existsSync(dirPath)) {
+      return dirPath
+    }
+
+    // Try to find the directory with case-insensitive matching
+    const parentDir = dirname(dirPath)
+    const dirName = basename(dirPath)
+
+    // First check if parent directory exists
+    const parentWithCorrectCase = parentDir === dirPath
+      ? undefined
+      : findDirectoryWithCorrectCase(parentDir)
+
+    if (!parentWithCorrectCase) {
+      return undefined
+    }
+
+    // Now look for the directory with case-insensitive matching
+    const entries = readdirSync(parentWithCorrectCase)
+    const matchingEntry = entries.find(
+      entry => entry.toLowerCase() === dirName.toLowerCase() &&
+              existsSync(join(parentWithCorrectCase, entry)) &&
+              statSync(join(parentWithCorrectCase, entry)).isDirectory()
+    )
+
+    if (matchingEntry) {
+      return join(parentWithCorrectCase, matchingEntry)
+    }
+
+    return undefined
+  } catch (error) {
+    logError(`Error finding directory with correct case for ${dirPath}: ${error}`)
+    return undefined
+  }
 }
 
 /**

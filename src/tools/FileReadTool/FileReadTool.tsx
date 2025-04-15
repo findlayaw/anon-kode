@@ -14,6 +14,8 @@ import {
   findSimilarFile,
   normalizeFilePath,
   readTextContent,
+  convertWindowsPathToWSL,
+  isRunningInWSL,
 } from '../../utils/file.js'
 import { logError } from '../../utils/log'
 import { getTheme } from '../../utils/theme'
@@ -133,7 +135,13 @@ export const FileReadTool = {
     return <FallbackToolUseRejectedMessage />
   },
   async validateInput({ file_path, offset, limit }) {
-    const fullFilePath = normalizeFilePath(file_path)
+    // Handle Windows paths if running in WSL
+    let normalizedPath = file_path
+    if (isRunningInWSL() && file_path.match(/^[a-zA-Z]:\\?/)) {
+      normalizedPath = convertWindowsPathToWSL(file_path)
+    }
+
+    const fullFilePath = normalizeFilePath(normalizedPath)
 
     if (!existsSync(fullFilePath)) {
       // Try to find a similar file with a different extension
@@ -174,8 +182,14 @@ export const FileReadTool = {
     { file_path, offset = 1, limit = undefined },
     { readFileTimestamps },
   ) {
-    const ext = path.extname(file_path).toLowerCase()
-    const fullFilePath = normalizeFilePath(file_path)
+    // Handle Windows paths if running in WSL
+    let normalizedPath = file_path
+    if (isRunningInWSL() && file_path.match(/^[a-zA-Z]:\\?/)) {
+      normalizedPath = convertWindowsPathToWSL(file_path)
+    }
+
+    const ext = path.extname(normalizedPath).toLowerCase()
+    const fullFilePath = normalizeFilePath(normalizedPath)
 
     // Update read timestamp, to invalidate stale writes
     readFileTimestamps[fullFilePath] = Date.now()
