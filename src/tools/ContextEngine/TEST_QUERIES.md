@@ -1,6 +1,6 @@
-# CodeContextTool Test Queries
+# ContextEngine Test Queries
 
-This document provides a comprehensive set of queries to test all capabilities of the improved CodeContextTool. These queries are based on actual usage patterns and are designed to exercise different aspects of the tool.
+This document provides a comprehensive set of queries to test all capabilities of the improved ContextEngine. These queries are based on actual usage patterns and are designed to exercise different aspects of the tool.
 
 ## Basic Component Search
 

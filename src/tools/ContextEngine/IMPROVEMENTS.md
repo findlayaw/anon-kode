@@ -1,6 +1,6 @@
-# CodeContextTool (DispatchTool) Improvements
+# ContextEngine Improvements
 
-This document outlines the comprehensive improvements made to the CodeContextTool (DispatchTool) to address user feedback and enhance its capabilities.
+This document outlines the comprehensive improvements made to the ContextEngine to address user feedback and enhance its capabilities.
 
 ## Key Improvements
 
@@ -67,22 +67,22 @@ This document outlines the comprehensive improvements made to the CodeContextToo
    - Advanced pattern generation
    - Result ranking and formatting
 
-5. **improvedDispatchTool.tsx**
+5. **improvedContextEngine.tsx**
    - Integration of all improvements
    - Enhanced search workflow
    - Better error handling and results presentation
 
 ## Using the Improved Tool
 
-The improvements are designed to be a drop-in replacement for the original DispatchTool. After running the update script (`updateTool.ts`), you can use the tool as before, but with greatly enhanced capabilities.
+The improvements are designed to be a drop-in replacement for the original tool. After running the update script (`updateTool.ts`), you can use the tool as before, but with greatly enhanced capabilities.
 
 ### Example Usage
 
 ```typescript
-import { DispatchTool } from './tools/DispatchTool'
+import { ContextEngine } from './tools/ContextEngine'
 
 // The tool's interface remains the same
-const result = await DispatchTool.call({
+const result = await ContextEngine.call({
   information_request: "How is the dashboard component implemented?",
   file_type: "tsx",
   include_dependencies: true

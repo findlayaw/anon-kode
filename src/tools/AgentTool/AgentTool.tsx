@@ -187,7 +187,7 @@ export const AgentTool = {
     return true // for now...
   },
   async isEnabled() {
-    // Disabled in favor of CodeContextTool
+    // Disabled in favor of ContextEngine
     return false
   },
   userFacingName() {

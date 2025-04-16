@@ -1,5 +1,5 @@
 /**
- * File path utility functions for the CodeContextTool
+ * File path utility functions for the ContextEngine
  * This module provides functions for handling and resolving file paths across different platforms
  */
 

@@ -15,7 +15,7 @@ import { setCwd } from '../utils/state'
 import { getSlowAndCapableModel } from '../utils/model'
 import { logError } from '../utils/log'
 import { BashTool } from '../tools/BashTool/BashTool'
-import { DispatchTool } from '../tools/DispatchTool/DispatchTool'
+import { ContextEngine } from '../tools/ContextEngine/ContextEngine'
 import { GlobTool } from '../tools/GlobTool/GlobTool'
 import { GrepTool } from '../tools/GrepTool/GrepTool'
 import { MACRO } from '../constants/macros'
@@ -49,11 +49,11 @@ const MCP_COMMANDS: Command[] = [review]
 // - GlobTool
 // - GrepTool
 const MCP_TOOLS: Tool[] = [
-  // AgentTool, // Disabled in favor of CodeContextTool
-  // BashTool, // Hidden but still available for CodeContextTool
-  DispatchTool,
-  // GlobTool, // Hidden but still available for CodeContextTool
-  // GrepTool, // Hidden but still available for CodeContextTool
+  // AgentTool, // Disabled in favor of ContextEngine
+  // BashTool, // Hidden but still available for ContextEngine
+  ContextEngine,
+  // GlobTool, // Hidden but still available for ContextEngine
+  // GrepTool, // Hidden but still available for ContextEngine
 ]
 
 export async function startCustomMCPServer(cwd: string): Promise<void> {

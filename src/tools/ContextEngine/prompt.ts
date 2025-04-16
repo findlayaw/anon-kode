@@ -1,4 +1,4 @@
-// Tool name is imported in DispatchTool.tsx
+// Tool name is imported in ContextEngine.tsx
 
 export const DESCRIPTION = `
 - Advanced code search tool that finds and explains relevant code snippets

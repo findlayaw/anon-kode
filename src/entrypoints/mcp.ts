@@ -16,7 +16,7 @@ import { getSlowAndCapableModel } from '../utils/model'
 import { logError } from '../utils/log'
 import { LSTool } from '../tools/lsTool/lsTool'
 import { BashTool } from '../tools/BashTool/BashTool'
-import { DispatchTool } from '../tools/DispatchTool/DispatchTool'
+import { ContextEngine } from '../tools/ContextEngine/ContextEngine'
 import { FileEditTool } from '../tools/FileEditTool/FileEditTool'
 import { FileReadTool } from '../tools/FileReadTool/FileReadTool'
 import { GlobTool } from '../tools/GlobTool/GlobTool'
@@ -38,13 +38,13 @@ const state: {
 const MCP_COMMANDS: Command[] = [review]
 
 const MCP_TOOLS: Tool[] = [
-  // AgentTool, // Disabled in favor of CodeContextTool
-  // BashTool, // Hidden but still available for CodeContextTool
-  DispatchTool,
+  // AgentTool, // Disabled in favor of ContextEngine
+  // BashTool, // Hidden but still available for ContextEngine
+  ContextEngine,
   FileEditTool,
   FileReadTool,
-  // GlobTool, // Hidden but still available for CodeContextTool
-  // GrepTool, // Hidden but still available for CodeContextTool
+  // GlobTool, // Hidden but still available for ContextEngine
+  // GrepTool, // Hidden but still available for ContextEngine
   FileWriteTool,
   LSTool,
 ]

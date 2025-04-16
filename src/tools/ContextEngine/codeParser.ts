@@ -1,5 +1,5 @@
 /**
- * Code parsing utilities for the CodeContextTool
+ * Code parsing utilities for the ContextEngine
  * This module provides functions to parse code and extract structural information
  */
 

@@ -1,8 +1,8 @@
-# CodeContextTool (DispatchTool)
+# ContextEngine
 
 ## Overview
 
-The CodeContextTool is an advanced codebase search and context retrieval tool that helps users understand code structure and find root causes of issues. It combines file pattern matching, content searching, and code structure analysis to provide comprehensive context about the codebase.
+The ContextEngine is an advanced codebase search and context retrieval tool that helps users understand code structure and find root causes of issues. It combines file pattern matching, content searching, and code structure analysis to provide comprehensive context about the codebase.
 
 ## Key Features
 
@@ -17,12 +17,12 @@ The CodeContextTool is an advanced codebase search and context retrieval tool th
 
 ```typescript
 // Basic usage
-CodeContextTool({
+ContextEngine({
   information_request: "How is the authentication module implemented?"
 })
 
 // With filters
-CodeContextTool({
+ContextEngine({
   information_request: "Find all React components that use the useEffect hook",
   file_type: "tsx",
   directory: "src/components",
@@ -31,12 +31,12 @@ CodeContextTool({
 })
 
 // With specific search mode
-CodeContextTool({
+ContextEngine({
   information_request: "Find exact matches for the pattern 'handleSubmit'",
   search_mode: "keyword"
 })
 
-CodeContextTool({
+ContextEngine({
   information_request: "Find code related to user authentication",
   search_mode: "semantic"
 })

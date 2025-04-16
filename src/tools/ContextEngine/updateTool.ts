@@ -1,5 +1,5 @@
 /**
- * Update script to replace the original DispatchTool with the improved implementation
+ * Update script to replace the original ContextEngine with the improved implementation
  * Run this script to apply the improvements to the codebase
  */
 
@@ -7,7 +7,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 // Get the current directory
-const dispatchDir = __dirname
+const contextEngineDir = __dirname
 
 // Find all the new implementation files
 const improvedFiles = [
@@ -15,31 +15,31 @@ const improvedFiles = [
   'improvedChunking.ts',
   'filePathUtils.ts',
   'searchUtils.ts',
-  'improvedDispatchTool.tsx'
+  'improvedContextEngine.tsx'
 ]
 
-console.log('Starting the DispatchTool upgrade process...')
+console.log('Starting the ContextEngine upgrade process...')
 
-// Update DispatchTool.tsx
+// Update ContextEngine.tsx
 try {
-  console.log('Updating DispatchTool.tsx...')
+  console.log('Updating ContextEngine.tsx...')
   
   // Read the improved implementation
-  const improvedToolPath = path.join(dispatchDir, 'improvedDispatchTool.tsx')
+  const improvedToolPath = path.join(contextEngineDir, 'improvedContextEngine.tsx')
   const improvedToolContent = fs.readFileSync(improvedToolPath, 'utf-8')
   
   // Update the file with some minor adjustments
   let updatedContent = improvedToolContent
-    // Change the export name from ImprovedDispatchTool to DispatchTool
-    .replace('export const ImprovedDispatchTool = {', 'export const DispatchTool = {')
+    // Change the export name from ImprovedContextEngine to ContextEngine
+    .replace('export const ImprovedContextEngine = {', 'export const ContextEngine = {}')
   
   // Write to the original file
-  const originalToolPath = path.join(dispatchDir, 'DispatchTool.tsx')
+  const originalToolPath = path.join(contextEngineDir, 'ContextEngine.tsx')
   fs.writeFileSync(originalToolPath, updatedContent, 'utf-8')
   
-  console.log('Successfully updated DispatchTool.tsx')
+  console.log('Successfully updated ContextEngine.tsx')
 } catch (error) {
-  console.error('Error updating DispatchTool.tsx:', error)
+  console.error('Error updating ContextEngine.tsx:', error)
   process.exit(1)
 }
 
@@ -47,15 +47,15 @@ try {
 try {
   console.log('Creating/updating index.ts to export all modules...')
   
-  const indexPath = path.join(dispatchDir, 'index.ts')
+  const indexPath = path.join(contextEngineDir, 'index.ts')
   
   const indexContent = `/**
- * CodeContextTool (DispatchTool) exports
- * This file exports all the modules needed for the improved DispatchTool
+ * ContextEngine exports
+ * This file exports all the modules needed for the improved ContextEngine
  */
 
 // Re-export main tool
-export { DispatchTool } from './DispatchTool'
+export { ContextEngine } from './ContextEngine'
 
 // Export constants
 export { TOOL_NAME } from './constants'
@@ -101,9 +101,9 @@ export {
   process.exit(1)
 }
 
-console.log('DispatchTool upgrade complete!')
+console.log('ContextEngine upgrade complete!')
 console.log('The following files were added:')
 improvedFiles.forEach(file => console.log(`- ${file}`))
-console.log('\nYou may now import the improved DispatchTool functionality using:')
-console.log('import { DispatchTool } from \'./tools/DispatchTool\'')
+console.log('\nYou may now import the improved ContextEngine functionality using:')
+console.log('import { ContextEngine } from \'./tools/ContextEngine\'')
 console.log('\nTo verify the upgrade, run the tool and check its improved search capabilities.')

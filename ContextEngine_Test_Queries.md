@@ -1,6 +1,6 @@
-# CodeContextTool Test Queries for Journalit - Failed Tests Only
+# ContextEngine Test Queries for Journalit - Failed Tests Only
 
-This document provides queries that failed in the test results for the CodeContextTool. These queries are based on actual usage patterns from the Journalit codebase and highlight areas for improvement.
+This document provides queries that failed in the test results for the ContextEngine. These queries are based on actual usage patterns from the Journalit codebase and highlight areas for improvement.
 
 ## Directory-Specific Searches
 

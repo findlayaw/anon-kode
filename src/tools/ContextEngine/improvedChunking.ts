@@ -1,5 +1,5 @@
 /**
- * Improved code chunking utilities for the CodeContextTool
+ * Improved code chunking utilities for the ContextEngine
  * This module provides advanced functions to split code into logical chunks for better context retrieval
  */
 

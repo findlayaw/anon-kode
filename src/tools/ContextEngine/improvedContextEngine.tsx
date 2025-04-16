@@ -61,7 +61,7 @@ const inputSchema = z.strictObject({
     .optional()
 })
 
-// Tools that the DispatchTool can use for searching the codebase
+// Tools that the ContextEngine can use for searching the codebase
 const SEARCH_TOOLS: Tool[] = [
   GrepTool,
   GlobTool,
@@ -69,7 +69,7 @@ const SEARCH_TOOLS: Tool[] = [
   LSTool,
 ]
 
-export const ImprovedDispatchTool = {
+export const ImprovedContextEngine = {
   name: TOOL_NAME,
   async description() {
     return DESCRIPTION
@@ -181,7 +181,7 @@ export const ImprovedDispatchTool = {
     const allowedTools = SEARCH_TOOLS
 
     // Create a custom canUseTool function that always grants permission for our search tools
-    const dispatchCanUseTool = async (tool: Tool, input: any) => {
+    const contextEngineCanUseTool = async (tool: Tool, input: any) => {
       // Always allow our search tools
       if (SEARCH_TOOLS.map(_ => _.name).includes(tool.name)) {
         return { result: true }
@@ -210,7 +210,7 @@ export const ImprovedDispatchTool = {
         messages,
         [SYSTEM_PROMPT],
         context,
-        dispatchCanUseTool,
+        contextEngineCanUseTool,
         modifiedContext,
       ),
     )

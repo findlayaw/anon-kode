@@ -1,5 +1,5 @@
 /**
- * Improved code parsing utilities for the CodeContextTool
+ * Improved code parsing utilities for the ContextEngine
  * This module uses AST-based parsing for more reliable code structure analysis
  */
 

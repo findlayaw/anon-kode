@@ -1,12 +1,12 @@
 /**
- * Test script for the improved DispatchTool
+ * Test script for the improved ContextEngine
  * This script runs a set of test queries to verify the enhanced functionality
  */
 
 import path from 'path'
 import fs from 'fs'
 import { getCwd } from '../../utils/state'
-import { ImprovedDispatchTool } from './improvedDispatchTool'
+import { ImprovedContextEngine } from './improvedContextEngine'
 
 // Mock context and canUseTool functions for testing
 const mockContext = {
@@ -59,7 +59,7 @@ async function runTest(test: typeof testQueries[0]) {
   
   try {
     // Create generator from the tool
-    const resultGenerator = ImprovedDispatchTool.call(
+    const resultGenerator = ImprovedContextEngine.call(
       test.query as any, 
       mockContext as any, 
       mockCanUseTool as any
@@ -110,7 +110,7 @@ async function runTest(test: typeof testQueries[0]) {
 
 // Run all tests
 async function runAllTests() {
-  console.log('Starting DispatchTool tests...')
+  console.log('Starting ContextEngine tests...')
   console.log(`Working directory: ${getCwd()}`)
   
   // Create test results directory

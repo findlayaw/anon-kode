@@ -1,5 +1,5 @@
 /**
- * Search utility functions for the CodeContextTool
+ * Search utility functions for the ContextEngine
  * This module provides advanced search functions to improve result completeness and accuracy
  */
 
