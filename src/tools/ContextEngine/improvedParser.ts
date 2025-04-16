@@ -89,7 +89,7 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
 
   // Try to parse the file with AST
   try {
-    // Parse the code into an AST
+    // Parse the code into an AST with improved error handling
     const ast = parser.parse(fileContent, {
       sourceType: 'module',
       plugins,
@@ -97,6 +97,7 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
       ranges: true,
       tokens: true,
       errorRecovery: true,
+      allowImportExportEverywhere: true // More lenient parsing for complex files
     })
 
     // Lines array for extracting content
@@ -596,9 +597,99 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
     console.error(`AST parsing failed for ${filePath}. Falling back to regex parsing:`, error)
     
     // Fall back to regex-based parsing if AST parsing fails
-    const { parseCodeStructure, getDependencyInfo } = require('./codeParser')
-    const regexEntities = parseCodeStructure(filePath, fileContent)
-    const regexDependencies = getDependencyInfo(filePath, fileContent)
+    // Use imports instead of requires to avoid circular reference issues
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Load the code parser functions directly
+    const codeParserPath = path.join(__dirname, 'codeParser.ts');
+    const codeParserContent = fs.readFileSync(codeParserPath, 'utf-8');
+    
+    // Extract regexes from the codeParser file
+    const functionRegex = /function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
+    const interfaceRegex = /interface\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+    const exportRegex = /export\s+(default\s+)?(const|class|function|interface|type)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+    
+    // Use a simplified regex-based approach as fallback
+    const lines = fileContent.split('\n');
+    
+    // Extract basic entities
+    const regexEntities: CodeEntity[] = [];
+    let currentBlock = '';
+    let blockStart = 0;
+    let blockName = '';
+    let blockType = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Try to identify code blocks
+      if (line.match(/^(export\s+)?(function|class|interface|type|const)\s+[a-zA-Z_]/)) {
+        // If we were tracking a previous block, add it
+        if (blockName) {
+          regexEntities.push({
+            type: blockType as any,
+            name: blockName,
+            startLine: blockStart,
+            endLine: i - 1,
+            content: currentBlock,
+            dependencies: []
+          });
+        }
+        
+        // Start a new block
+        blockStart = i + 1;
+        currentBlock = line + '\n';
+        
+        // Determine block type and name
+        if (line.includes('function ')) {
+          blockType = 'function';
+          const match = line.match(/function\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          blockName = match ? match[1] : 'unknown';
+        } else if (line.includes('class ')) {
+          blockType = 'class';
+          const match = line.match(/class\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          blockName = match ? match[1] : 'unknown';
+        } else if (line.includes('interface ')) {
+          blockType = 'interface';
+          const match = line.match(/interface\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          blockName = match ? match[1] : 'unknown';
+        } else if (line.includes('type ')) {
+          blockType = 'type';
+          const match = line.match(/type\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          blockName = match ? match[1] : 'unknown';
+        } else if (line.includes('const ')) {
+          blockType = 'variable';
+          const match = line.match(/const\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          blockName = match ? match[1] : 'unknown';
+        }
+      } else if (blockName) {
+        // Continue adding to current block
+        currentBlock += line + '\n';
+      }
+    }
+    
+    // Add the final block if it exists
+    if (blockName) {
+      regexEntities.push({
+        type: blockType as any,
+        name: blockName,
+        startLine: blockStart,
+        endLine: lines.length,
+        content: currentBlock,
+        dependencies: []
+      });
+    }
+    
+    // Extract basic dependencies
+    const importMatches = fileContent.match(/import\s+.*\s+from\s+['"]([^'"]+)['"]/g) || [];
+    const regexDependencies = {
+      imports: importMatches.map(imp => {
+        const sourceMatch = imp.match(/from\s+['"]([^'"]+)['"]/);
+        return { source: sourceMatch ? sourceMatch[1] : '', specifiers: [] };
+      }),
+      exports: []
+    };
     
     return {
       entities: regexEntities,
@@ -680,7 +771,7 @@ export function extractCodeChunksWithAST(filePath: string, fileContent: string):
   // Parse the code with AST
   const { entities, dependencies } = parseCodeWithAST(filePath, fileContent)
   
-  // Create chunks from entities
+  // Create chunks from entities with enhanced metadata based on research.md insights
   const chunks = entities.map(entity => ({
     content: entity.content,
     startLine: entity.startLine,
@@ -691,7 +782,18 @@ export function extractCodeChunksWithAST(filePath: string, fileContent: string):
       parentName: entity.parentName,
       dependencies: entity.dependencies,
       documentation: entity.documentation,
-      isExported: entity.isExported
+      isExported: entity.isExported,
+      // Add hybrid search metadata for better retrieval
+      keywords: [
+        entity.name,
+        entity.type,
+        // Extract from content the first few words after function/class/interface declarations
+        ...(entity.content.match(/\b(function|class|interface|type)\s+\w+\s+\w+/g) || []),
+        // Add variant names for interface/props detection
+        ...(entity.name.endsWith('Props') ? [entity.name.replace(/Props$/, '')] : []),
+        ...(entity.name.includes('Fields') ? [entity.name.replace(/Fields/, '')] : []),
+        ...(entity.name.includes('Form') ? [entity.name.replace(/Form/, '')] : [])
+      ].filter(Boolean)
     }
   }))
   

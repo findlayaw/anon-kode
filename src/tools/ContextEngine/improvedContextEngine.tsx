@@ -337,20 +337,23 @@ export const ImprovedContextEngine = {
           // Try each pattern
           for (const pattern of simpleGlobPatterns) {
             try {
-              const { exec } = require('child_process')
+              const { execSync } = require('child_process')
               // Use find command for better performance with large codebases
               const cmd = `find ${cwd} -path "${pattern}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" | head -10`
-              const results = exec(cmd, { encoding: 'utf8' })
-              
-              if (results.stdout) {
-                const foundFiles = results.stdout.split('\n').filter(Boolean)
-                  .map(file => path.relative(cwd, file))
+              const results = execSync(cmd, { encoding: 'utf8' })
                 
-                for (const foundFile of foundFiles) {
-                  if (!filePaths.includes(foundFile)) {
-                    filePaths.push(foundFile)
+                if (results) {
+                  const foundFiles = results.split('\n').filter(Boolean)
+                    .map(file => path.relative(cwd, file))
+                  
+                  for (const foundFile of foundFiles) {
+                    if (!filePaths.includes(foundFile)) {
+                      filePaths.push(foundFile)
+                    }
                   }
                 }
+              } catch (error) {
+                console.error(`Error executing find command: ${error}`)
               }
             } catch (error) {
               console.error(`Error with glob pattern ${pattern}:`, error)

@@ -233,15 +233,37 @@ export function connectChunkRelationships(
       
       if (isProps) {
         // Try to identify the component that uses this props interface
+        // Enhanced to handle more prop naming patterns
         let componentName = chunk.name.replace(/Props$/, '')
+        const alternativeNames = []
         
-        // Check if this component exists
+        // Handle special cases like AssetFieldsProps -> AssetFields
+        if (chunk.name.includes('Fields') && chunk.name.endsWith('Props')) {
+          alternativeNames.push(chunk.name.replace(/FieldsProps$/, 'Fields'))
+        }
+        
+        // Handle FormData interfaces
+        if (chunk.name.includes('Form') && chunk.name.endsWith('Props')) {
+          alternativeNames.push(chunk.name.replace(/FormProps$/, 'Form'))
+        }
+        
+        // Check if the main component name exists
         if (entityMap.has(componentName)) {
           // Record the relationship
           if (!propsUsageMap.has(chunk.name)) {
             propsUsageMap.set(chunk.name, [])
           }
           propsUsageMap.get(chunk.name)!.push(componentName)
+        }
+        
+        // Also check alternative names
+        for (const altName of alternativeNames) {
+          if (entityMap.has(altName)) {
+            if (!propsUsageMap.has(chunk.name)) {
+              propsUsageMap.set(chunk.name, [])
+            }
+            propsUsageMap.get(chunk.name)!.push(altName)
+          }
         }
       }
     }
@@ -308,7 +330,7 @@ export function connectChunkRelationships(
       }
     }
     
-    // Add interface relationship data
+    // Add interface relationship data with improved handling based on research.md insights
     if (chunk.type === 'interface' || chunk.type === 'type') {
       // Add interfaces that extend this one
       if (extensionMap.has(chunk.name)) {
@@ -334,14 +356,54 @@ export function connectChunkRelationships(
           }
         }
       }
+      
+      // Hybrid approach from research.md: Attempt to infer relationships for Props interfaces
+      // even if we don't have explicit usage information
+      if ((chunk.name.endsWith('Props') || chunk.name.includes('Props')) && 
+          (!propsUsageMap.has(chunk.name) || !propsUsageMap.get(chunk.name)?.length)) {
+        
+        // Various name transformations that might identify the component
+        const potentialComponentNames = [
+          chunk.name.replace(/Props$/, ''),
+          chunk.name.replace(/FieldsProps$/, 'Fields'),
+          chunk.name.replace(/FormProps$/, 'Form'),
+          // For patterns like AssetFieldsProps -> AssetFields
+          chunk.name.replace(/([A-Z][a-z]+)FieldsProps$/, '$1Fields'),
+          // For patterns like TradeFormProps -> TradeForm
+          chunk.name.replace(/([A-Z][a-z]+)FormProps$/, '$1Form')
+        ].filter(Boolean);
+        
+        // Look for these components in the entityMap
+        const inferredComponents = potentialComponentNames.filter(name => 
+          entityMap.has(name) || 
+          [...entityMap.keys()].some(key => key.endsWith(`:${name}`))
+        );
+        
+        if (inferredComponents.length > 0) {
+          chunk.metadata.relationshipContext = {
+            ...chunk.metadata.relationshipContext,
+            usedInComponents: inferredComponents
+          };
+          
+          if (chunk.metadata.typeDefinition) {
+            chunk.metadata.typeDefinition = {
+              ...chunk.metadata.typeDefinition,
+              isComponentProps: true,
+              referencedBy: inferredComponents
+            };
+          }
+        }
+      }
     }
     
     // Add component relationship data
     if (chunk.type === 'react-component' || 
         (chunk.type === 'function' && chunk.name.match(/^[A-Z]/))) {
       
-      // Link to Props interface if it exists
+      // Link to Props interface if it exists - expanded to check for more patterns
       const propsInterface = `${chunk.name}Props`
+      
+      // Check for direct props interface match
       if (interfaceMap.has(propsInterface)) {
         chunk.metadata.relationshipContext = {
           ...chunk.metadata.relationshipContext,
@@ -349,6 +411,27 @@ export function connectChunkRelationships(
             ...(chunk.metadata.relationshipContext?.relatedComponents || []),
             propsInterface
           ]
+        }
+      }
+      
+      // Check for alternate prop naming patterns
+      const alternatePatterns = [
+        // For AssetFields component, look for AssetFieldsProps
+        `${chunk.name.replace(/s$/, '')}FieldsProps`,  
+        // For Form components
+        `${chunk.name}Data`,
+        `${chunk.name.replace(/Form$/, '')}FormData`
+      ]
+      
+      for (const pattern of alternatePatterns) {
+        if (interfaceMap.has(pattern)) {
+          chunk.metadata.relationshipContext = {
+            ...chunk.metadata.relationshipContext,
+            relatedComponents: [
+              ...(chunk.metadata.relationshipContext?.relatedComponents || []),
+              pattern
+            ]
+          }
         }
       }
     }
@@ -539,11 +622,22 @@ export function findRelevantChunks(
         
       case 'interface':
         // Significantly increase interface scoring to fix test failures
-        score += WEIGHT.INTERFACE_BOOST
+        score += WEIGHT.INTERFACE_BOOST * 2
         
         // Additional boost for interfaces that are likely Props
         if (chunk.name.endsWith('Props') || chunk.name.includes('Props')) {
-          score += WEIGHT.PROPS_INTERFACE_BOOST
+          score += WEIGHT.PROPS_INTERFACE_BOOST * 1.5
+        }
+        
+        // Special boost for form data interfaces
+        if (chunk.name.endsWith('Data') || 
+           (chunk.name.includes('Form') && chunk.name.includes('Data'))) {
+          score += WEIGHT.PROPS_INTERFACE_BOOST * 1.3
+        }
+        
+        // Special boost for field interfaces
+        if (chunk.name.includes('Fields') && chunk.name.includes('Props')) {
+          score += WEIGHT.PROPS_INTERFACE_BOOST * 1.7
         }
         
         if (dataRelatedQuery) score += WEIGHT.DOMAIN_MATCH * 1.5

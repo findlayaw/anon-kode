@@ -234,6 +234,9 @@ export function formatPathForDisplay(filePath: string, preferWindowsPaths: boole
     }
   }
   
+  // Always ensure paths are normalized with consistent separators
+  return path.normalize(filePath).replace(/\\/g, '/')
+  
   return filePath
 }
 

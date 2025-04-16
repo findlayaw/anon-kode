@@ -235,6 +235,27 @@ export function extractPotentialFileNames(query: string): string[] {
       for (let i = 0; i < parts.length - 1; i++) {
         fieldNameMatches.push(parts[i] + parts[i+1]);
       }
+      
+      // Add special handling for "Fields" in field names
+      if (match.includes('Fields')) {
+        // Look for AssetFields -> Asset pattern
+        const baseFieldName = match.replace(/Fields(Props)?$/, '');
+        if (baseFieldName.length > 0) {
+          fieldNameMatches.push(baseFieldName);
+          fieldNameMatches.push(baseFieldName + 'Props');
+        }
+      }
+      
+      // Add special handling for "Form" in form names
+      if (match.includes('Form')) {
+        // Look for TradeForm -> Trade pattern
+        const baseFormName = match.replace(/Form(Data|Props)?$/, '');
+        if (baseFormName.length > 0) {
+          fieldNameMatches.push(baseFormName);
+          fieldNameMatches.push(baseFormName + 'Props');
+          fieldNameMatches.push(baseFormName + 'Data');
+        }
+      }
     }
   });
   potentialFileNames.push(...fieldNameMatches);
@@ -431,10 +452,43 @@ export function createContentSearchPatterns(
         patterns.push(`${nameWithoutExt}\\s*:\\s*${nameWithoutExt}Props`)
         patterns.push(`${nameWithoutExt}\\s*:\\s*React\\..*Props`)
         
-        // Specific pattern for Fields components and their props
+        // Enhanced patterns for Fields components and their props
         if (nameWithoutExt.includes('Fields')) {
-          patterns.push(`interface\\s+${nameWithoutExt.replace('Fields', '')}FieldsProps\\b`)
-          patterns.push(`type\\s+${nameWithoutExt.replace('Fields', '')}FieldsProps\\b`)
+          // Direct patterns
+          patterns.push(`interface\\s+${nameWithoutExt}Props\\b`)
+          patterns.push(`type\\s+${nameWithoutExt}Props\\b`)
+          
+          // Base name patterns (Asset from AssetFields)
+          const baseName = nameWithoutExt.replace(/Fields$/, '')
+          patterns.push(`interface\\s+${baseName}FieldsProps\\b`)
+          patterns.push(`type\\s+${baseName}FieldsProps\\b`)
+          
+          // Also look for the base entity itself
+          patterns.push(`\\b${baseName}\\b`)
+          patterns.push(`interface\\s+${baseName}Props\\b`)
+          
+          // Additional patterns for component-props relationship
+          patterns.push(`${nameWithoutExt}\\s*:\\s*${baseName}FieldsProps`)
+          patterns.push(`${baseName}\\s*:\\s*${nameWithoutExt}Props`)
+        }
+        
+        // Enhanced patterns for Form components and their data
+        if (nameWithoutExt.includes('Form')) {
+          // Look for FormData interface
+          patterns.push(`interface\\s+${nameWithoutExt}Data\\b`)
+          patterns.push(`type\\s+${nameWithoutExt}Data\\b`)
+          
+          // Base name patterns (Trade from TradeForm)
+          const baseName = nameWithoutExt.replace(/Form$/, '')
+          patterns.push(`interface\\s+${baseName}FormData\\b`)
+          patterns.push(`type\\s+${baseName}FormData\\b`)
+          
+          // Also look for the base entity
+          patterns.push(`\\b${baseName}\\b`)
+          
+          // Additional patterns for form-data relationship
+          patterns.push(`${nameWithoutExt}\\s*:\\s*${baseName}FormData`)
+          patterns.push(`${baseName}\\s*:\\s*${nameWithoutExt}Data`)
         }
         
         // Interface extension patterns
@@ -600,7 +654,55 @@ export function rankSearchResults(
   })
   
   // Sort by score in descending order
-  return scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
+  const sortedResults = scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
+  
+  // Apply hybrid search based on research.md - combine keyword search with vector similarity
+  // Implementation of a simple keyword-based re-ranking inspired by BM25
+  if (searchTerms.length > 0) {
+    sortedResults.forEach(result => {
+      // Count exact keyword matches in each result
+      let keywordMatchScore = 0
+      
+      // Use metadata keywords for more precise matching
+      const availableKeywords = result.chunks.flatMap(chunk => 
+        chunk.metadata.keywords || []
+      )
+      
+      // Count matches between search terms and available keywords
+      searchTerms.forEach(term => {
+        const termLower = term.toLowerCase()
+        
+        // Exact matches in keywords get highest score
+        const exactMatches = availableKeywords.filter(kw => 
+          kw.toLowerCase() === termLower
+        ).length
+        keywordMatchScore += exactMatches * 15
+        
+        // Partial matches in keywords
+        const partialMatches = availableKeywords.filter(kw => 
+          kw.toLowerCase().includes(termLower) && kw.toLowerCase() !== termLower
+        ).length
+        keywordMatchScore += partialMatches * 5
+        
+        // Interface/component pattern matches
+        if (term.endsWith('Props') || term.includes('Props')) {
+          const termWithoutProps = term.replace(/Props$/, '')
+          const relatedMatches = availableKeywords.filter(kw => 
+            kw.toLowerCase() === termWithoutProps.toLowerCase()
+          ).length
+          keywordMatchScore += relatedMatches * 20
+        }
+      })
+      
+      // Add a portion of keyword score to the overall result score
+      result.relevanceScore += keywordMatchScore
+    })
+    
+    // Re-sort after keyword scoring
+    sortedResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
+  }
+  
+  return sortedResults
 }
 
 /**
@@ -727,8 +829,14 @@ export function formatSearchResults(results: SearchResult[]): string {
           if ((chunk.type === 'react-component' || chunk.type === 'function') && 
               relations.relatedComponents?.length) {
             // Filter out only interfaces from related components
+            // Enhanced to catch more forms of interface/props naming patterns
             const relatedInterfaces = relations.relatedComponents.filter(comp => 
-              comp.endsWith('Props') || comp.includes('Interface') || comp.includes('Type')
+              comp.endsWith('Props') || 
+              comp.includes('Props') || 
+              comp.includes('Interface') || 
+              comp.includes('Type') ||
+              comp.endsWith('Data') || 
+              (comp.includes('Form') && comp.includes('Data'))
             )
             
             if (relatedInterfaces.length > 0) {
@@ -809,48 +917,120 @@ export function formatSearchResults(results: SearchResult[]): string {
     }
   })
   
-  // Add a summary section with relationship information
+  // Add a summary section with enhanced relationship information based on research.md
   if (results.length > 1) {
     output += "\n\n## Relationships Between Found Files\n\n"
     
-    // Collect file relationship data
+    // Start with text representation for compatibility
     const fileLinks: string[] = []
     
-    results.forEach(result => {
+    // Create a graph representation for visualization (based on research.md section on dependency graphs)
+    output += "```mermaid\ngraph TD;\n"
+    
+    // First, add all nodes in the graph
+    results.forEach((result, idx) => {
       const displayPath = result.formattedDisplayPath || result.filePath
       const fileName = path.basename(displayPath)
+      output += `  file${idx}["${fileName}"];\n`
+    })
+    
+    // Track edges to avoid duplicates
+    const edges = new Set<string>()
+    
+    results.forEach((sourceResult, sourceIdx) => {
+      const sourceFileName = path.basename(sourceResult.formattedDisplayPath || sourceResult.filePath)
       
       // Check for imports between found files
-      const imports = result.chunks
+      const imports = sourceResult.chunks
         ?.filter(chunk => chunk.type === 'imports')
         ?.flatMap(chunk => chunk.metadata.relationshipContext?.imports || []) || []
       
-      const foundFileImports = imports.filter(imp => 
-        results.some(r => {
-          const otherFileName = path.basename(r.filePath)
-          return imp.includes(otherFileName.replace(/\.[^.]+$/, ''))
+      results.forEach((targetResult, targetIdx) => {
+        if (sourceIdx === targetIdx) return
+        
+        const targetFileName = path.basename(targetResult.formattedDisplayPath || targetResult.filePath)
+        const targetShortName = targetFileName.replace(/\.[^.]+$/, '')
+        
+        // Import relationships
+        if (imports.some(imp => imp.includes(targetShortName))) {
+          const edgeKey = `file${sourceIdx}->file${targetIdx}`
+          if (!edges.has(edgeKey)) {
+            output += `  file${sourceIdx} -->|imports| file${targetIdx};\n`
+            edges.add(edgeKey)
+            fileLinks.push(`${sourceFileName} imports: ${targetShortName}`)
+          }
+        }
+        
+        // Component/Interface relationships
+        const interfaces = sourceResult.chunks
+          ?.filter(chunk => chunk.type === 'interface' || chunk.type === 'type')
+          ?.map(chunk => chunk.name) || []
+          
+        const components = targetResult.chunks
+          ?.filter(chunk => chunk.type === 'react-component' || (chunk.type === 'function' && /^[A-Z]/.test(chunk.name)))
+          ?.map(chunk => chunk.name) || []
+        
+        // Check for interface-component relationships
+        interfaces.forEach(intf => {
+          if (intf.endsWith('Props') || intf.includes('Props')) {
+            // Try different naming patterns
+            const componentNames = [
+              intf.replace(/Props$/, ''),
+              intf.replace(/FieldsProps$/, 'Fields'),
+              intf.replace(/FormProps$/, 'Form'),
+              intf.replace(/([A-Z][a-z]+)FieldsProps$/, '$1Fields')
+            ]
+            
+            if (componentNames.some(name => components.includes(name))) {
+              const edgeKey = `file${sourceIdx}->file${targetIdx}_props`
+              if (!edges.has(edgeKey)) {
+                output += `  file${sourceIdx} -->|provides props| file${targetIdx};\n`
+                edges.add(edgeKey)
+                fileLinks.push(`${sourceFileName} provides props for ${targetFileName}`)
+              }
+            }
+          }
         })
-      )
-      
-      if (foundFileImports.length > 0) {
-        fileLinks.push(`${fileName} imports: ${foundFileImports.join(', ')}`)
-      }
-      
-      // Check for relationships through components
-      const relatedComponents = result.chunks
-        ?.flatMap(chunk => chunk.metadata.relationshipContext?.relatedComponents || []) || []
-      
-      const foundFileRelatedComponents = relatedComponents.filter(comp => 
-        results.some(r => {
-          const otherFileName = path.basename(r.filePath)
-          return otherFileName.startsWith(comp) || comp.includes(otherFileName.replace(/\.[^.]+$/, ''))
+        
+        // Data interface relationships
+        interfaces.forEach(intf => {
+          if (intf.endsWith('Data') || (intf.includes('Form') && intf.includes('Data'))) {
+            const componentNames = [
+              intf.replace(/Data$/, ''),
+              intf.replace(/FormData$/, 'Form'),
+              intf.replace(/([A-Z][a-z]+)FormData$/, '$1Form')
+            ]
+            
+            if (componentNames.some(name => components.includes(name))) {
+              const edgeKey = `file${sourceIdx}->file${targetIdx}_data`
+              if (!edges.has(edgeKey)) {
+                output += `  file${sourceIdx} -->|provides data model| file${targetIdx};\n`
+                edges.add(edgeKey)
+                fileLinks.push(`${sourceFileName} provides data model for ${targetFileName}`)
+              }
+            }
+          }
         })
-      )
-      
-      if (foundFileRelatedComponents.length > 0) {
-        fileLinks.push(`${fileName} references: ${foundFileRelatedComponents.join(', ')}`)
-      }
+        
+        // Check for relationships through related components
+        const relatedComponents = sourceResult.chunks
+          ?.flatMap(chunk => chunk.metadata.relationshipContext?.relatedComponents || []) || []
+        
+        if (relatedComponents.some(comp => 
+          targetFileName.includes(comp) || 
+          components.includes(comp)
+        )) {
+          const edgeKey = `file${sourceIdx}->file${targetIdx}_rel`
+          if (!edges.has(edgeKey)) {
+            output += `  file${sourceIdx} -.->|relates to| file${targetIdx};\n`
+            edges.add(edgeKey)
+            fileLinks.push(`${sourceFileName} relates to ${targetFileName}`)
+          }
+        }
+      })
     })
+    
+    output += "```\n\n"
     
     if (fileLinks.length > 0) {
       output += fileLinks.join('\n') + '\n\n'
