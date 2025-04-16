@@ -1,53 +1,52 @@
 /**
- * Search utility functions for the ContextEngine
- * This module provides advanced search functions to improve result completeness and accuracy
+ * Search utilities for the ContextEngine
+ * This module provides enhanced search utilities with advanced scoring
  */
 
-import * as fs from 'fs'
 import * as path from 'path'
-import { findPathWithCorrectCase, findSimilarPaths, normalizePath } from './filePathUtils'
+import * as fs from 'fs'
 import { EnhancedCodeChunk, findRelevantChunks } from './improvedChunking'
 
 /**
- * Search mode options for different types of searches
- */
-export type SearchMode = 'hybrid' | 'keyword' | 'semantic'
-
-/**
- * Represents a search result with metadata
+ * Search result object with enhanced metadata and verification
  */
 export interface SearchResult {
   filePath: string
-  content: string
-  chunks: EnhancedCodeChunk[]
-  relevanceScore: number
-  confidenceScore?: number // Added confidence score to indicate result quality
-  matchContext?: string
   formattedDisplayPath?: string
-  isExactMatch?: boolean // Flag for exact matches vs inferred/synthetic results
-  matchType?: 'exact' | 'inferred' | 'partial' | 'synthetic' // Type of match found
+  content: string
+  chunks?: EnhancedCodeChunk[]
+  relevanceScore: number
+  matchType?: 'exact' | 'partial' | 'inferred' | 'synthetic'
+  confidenceScore?: number
+  analysisText?: string
+  isVerified?: boolean // Indicates if content has been verified against actual file
+  verified?: {
+    fileExists: boolean
+    contentMatches: boolean
+    interfacesVerified: boolean
+    componentsVerified: boolean
+  }
 }
 
 /**
- * Advanced search options
- */
-export interface SearchOptions {
-  fileType?: string
-  directory?: string
-  includeSubdirectories?: boolean
-  includeDependencies?: boolean
-  maxResults?: number
-  searchMode?: SearchMode
-}
-
-/**
- * Extract search terms from a natural language query with improved semantic understanding
+ * Extract potential search terms from a query
  * 
- * @param query The natural language query
- * @returns Array of extracted search terms with additional semantic context
+ * @param query User query
+ * @returns Array of significant search terms
  */
 export function extractSearchTerms(query: string): string[] {
-  // Remove common punctuation
+  // Remove common prepositions and articles to get more meaningful terms
+  // Also handle special characters, camelCase, PascalCase, etc.
+  const stopWords = [
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in', 
+    'into', 'is', 'it', 'no', 'not', 'of', 'on', 'or', 'such', 'that', 'the', 'their', 
+    'then', 'there', 'these', 'they', 'this', 'to', 'was', 'will', 'with', 'about',
+    'above', 'across', 'after', 'against', 'among', 'around', 'before', 'behind',
+    'below', 'beneath', 'beside', 'between', 'beyond', 'during', 'except', 'from',
+    'inside', 'outside', 'through', 'toward', 'under', 'upon', 'within', 'without'
+  ]
+  
+  // Remove punctuation and clean query
   const cleanedQuery = query
     .replace(/[.,;:!?'"()\[\]{}]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -55,181 +54,131 @@ export function extractSearchTerms(query: string): string[] {
 
   // Split into words, preserving case for later analysis
   const words = cleanedQuery.split(' ')
-
-  // Extended stop words list with programming-related common terms that aren't useful search targets
-  const stopWords = new Set([
-    // Common English stop words
-    'the', 'and', 'or', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
-    'about', 'as', 'of', 'that', 'this', 'these', 'those', 'from', 'is', 'are',
-    'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 
-    'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can',
-    'where', 'when', 'how', 'what', 'who', 'which', 'why', 'i', 'me', 'my', 'mine',
-    'you', 'your', 'yours', 'we', 'us', 'our', 'ours', 'they', 'them', 'their',
-    'theirs',
-    
-    // Common programming terms that are too generic to be useful search terms by themselves
-    'code', 'function', 'class', 'method', 'file', 'object', 'variable', 'value',
-    'type', 'interface', 'module', 'import', 'export', 'return', 'void', 'null',
-    'undefined', 'string', 'number', 'boolean', 'array', 'any', 'get', 'set',
-    'callback', 'parameter', 'argument', 'property', 'attribute'
-  ])
-
-  // Prepare an array for result terms
-  const searchTerms: string[] = []
   
-  // Extract terms, handling different cases
-  words.forEach(word => {
-    const lowerWord = word.toLowerCase()
-    
-    // Always include camelCase and PascalCase terms, they're likely important identifiers
-    if (/^[A-Z][a-z0-9]+[A-Z]|^[a-z]+[A-Z]/.test(word)) {
-      searchTerms.push(word) // Keep original case
-      return
-    }
-    
-    // Always include PascalCase terms (likely class/component names)
-    if (/^[A-Z][a-z0-9]+$/.test(word)) {
-      searchTerms.push(word) // Keep original case
-      return
-    }
-    
-    // Always include snake_case or kebab-case identifiers
-    if (/_/.test(word) || /-/.test(word)) {
-      searchTerms.push(word)
-      return
-    }
-    
-    // Skip stop words only if they're not part of a specialized programming term
-    if (!stopWords.has(lowerWord) && (word.length > 2)) {
-      searchTerms.push(lowerWord)
-    }
-  })
+  // Also extract potential identifiers (camelCase, PascalCase, etc)
+  const identifierRegex = /\b([A-Z][a-z0-9]+[A-Za-z0-9]*|[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*)\b/g
+  const identifiers = []
+  let match
   
-  // Extract multi-word programming concepts that might be important
-  const multiWordPatterns = [
-    // React and UI patterns
-    /react\s+component/i, /functional\s+component/i, /class\s+component/i,
-    /react\s+hook/i, /context\s+provider/i, /render\s+prop/i,
-    /higher\s+order\s+component/i, /event\s+handler/i, /style\s+component/i,
-    
-    // Data management patterns
-    /state\s+management/i, /data\s+flow/i, /form\s+validation/i,
-    /data\s+fetching/i, /async\s+operation/i, /error\s+handling/i,
-    /data\s+transform/i, /data\s+model/i,
-    
-    // Common programming patterns
-    /design\s+pattern/i, /factory\s+pattern/i, /singleton\s+pattern/i,
-    /observer\s+pattern/i, /dependency\s+injection/i, /type\s+checking/i,
-    /code\s+splitting/i, /lazy\s+loading/i
-  ]
+  while ((match = identifierRegex.exec(query)) !== null) {
+    identifiers.push(match[0])
+  }
   
-  multiWordPatterns.forEach(pattern => {
-    const match = cleanedQuery.match(pattern)
-    if (match && match[0]) {
-      // Add the multi-word concept, replacing spaces with underscores to keep it together
-      searchTerms.push(match[0].replace(/\s+/g, '_'))
-    }
-  })
+  // Merge words and identifiers, filter out stop words and very short terms
+  const allTerms = [...words, ...identifiers].filter(term => 
+    term.length > 2 && !stopWords.includes(term.toLowerCase())
+  )
   
-  // Enhance search terms with derived domain concepts
-  // These help establish the search context beyond just the literal terms
+  // Enhanced search terms with derived domain concepts
+  const enhancedTerms = [...allTerms]
   
   // UI/component related terms
-  if (searchTerms.some(term => ['component', 'jsx', 'tsx', 'render', 'view', 'ui'].includes(term.toLowerCase()))) {
-    searchTerms.push('component')
-    searchTerms.push('render')
+  if (allTerms.some(term => ['component', 'jsx', 'tsx', 'render', 'view', 'ui'].includes(term.toLowerCase()))) {
+    enhancedTerms.push('component')
+    enhancedTerms.push('render')
   }
   
   // Data management related terms
-  if (searchTerms.some(term => ['state', 'store', 'data', 'model', 'schema'].includes(term.toLowerCase()))) {
-    searchTerms.push('data')
-    searchTerms.push('state')
+  if (allTerms.some(term => ['state', 'store', 'data', 'model', 'schema'].includes(term.toLowerCase()))) {
+    enhancedTerms.push('data')
+    enhancedTerms.push('state')
   }
   
   // Form handling related terms
-  if (searchTerms.some(term => ['form', 'input', 'validate', 'submit'].includes(term.toLowerCase()))) {
-    searchTerms.push('form')
-    searchTerms.push('input')
+  if (allTerms.some(term => ['form', 'input', 'validate', 'submit'].includes(term.toLowerCase()))) {
+    enhancedTerms.push('form')
+    enhancedTerms.push('input')
   }
   
-  // Remove duplicates and normalize
-  return [...new Set(searchTerms)]
+  // Deduplicate to unique terms
+  return [...new Set(enhancedTerms)]
 }
 
 /**
- * Extract possible file names from a query with enhanced pattern recognition
+ * Extract potential file names from a query
  * 
- * @param query The search query
+ * @param query User query
  * @returns Array of potential file names
  */
 export function extractPotentialFileNames(query: string): string[] {
-  const potentialFileNames: string[] = []
-
-  // Match camelCase or PascalCase identifiers
-  // Improved regex to catch more variants of camelCase and PascalCase
-  const camelOrPascalCase = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g
-  const camelCaseMatches = query.match(camelOrPascalCase) || []
-  potentialFileNames.push(...camelCaseMatches)
-
-  // Match filenames with extensions - expanded to include more file types
-  const fileWithExtension = /\b[\w.-]+\.(js|jsx|ts|tsx|css|scss|less|html|md|json|yml|yaml|xml|svg|py|rb|java|go|php|c|cpp|h|cs)\b/g
-  const fileMatches = query.match(fileWithExtension) || []
-  potentialFileNames.push(...fileMatches)
-
-  // Match words that are likely component names - expanded to catch more UI component patterns
-  const componentNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)(View|Component|Page|Form|Modal|Dialog|Card|List|Item|Button|Input|Container|Widget|Panel|Bar|Menu|Nav|Header|Footer|Layout|Row|Column|Grid|Field|Label|Text|Icon|Image|Avatar|Chart|Graph|Table)\b/g
-  const componentMatches = query.match(componentNames) || []
-  potentialFileNames.push(...componentMatches)
-
-  // Match service, utility, and other common patterns
-  const utilityNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)(Service|Util|Utils|Utility|Helper|Manager|Provider|Client|Factory|Builder|Handler|Controller|Repository|Store|Hook|Context)\b/g
-  const utilityMatches = query.match(utilityNames) || []
-  potentialFileNames.push(...utilityMatches)
-
-  // Match kebab-case identifiers - improved to catch more variants
-  const kebabCase = /\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b/g
-  const kebabCaseMatches = query.match(kebabCase) || []
-  potentialFileNames.push(...kebabCaseMatches)
-
-  // Match snake_case identifiers - improved to catch more variants
-  const snakeCase = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g
-  const snakeCaseMatches = query.match(snakeCase) || []
-  potentialFileNames.push(...snakeCaseMatches)
-
-  // Match words that appear after "find", "in", "the", or similar contextual markers
-  const contextualMatches: string[] = []
-  const contextualPrefixes = ['find', 'in', 'the', 'for', 'about', 'how', 'where', 'implement']
+  const fileNames = []
   
-  contextualPrefixes.forEach(prefix => {
-    const prefixRegex = new RegExp(`\\b${prefix}\\s+([A-Z][a-zA-Z0-9]+|[a-z][a-z0-9]*(?:[A-Z][a-zA-Z0-9]*)+)\\b`, 'g')
-    let match
-    while ((match = prefixRegex.exec(query)) !== null) {
-      if (match[1] && match[1].length > 2) {
-        contextualMatches.push(match[1])
-      }
+  // Look for PascalCase identifiers - likely component names
+  const pascalCaseRegex = /\b[A-Z][a-zA-Z0-9]*\b/g
+  let match
+  
+  while ((match = pascalCaseRegex.exec(query)) !== null) {
+    fileNames.push(match[0])
+  }
+  
+  // Look for camelCase identifiers - likely utility functions, hooks, etc.
+  const camelCaseRegex = /\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b/g
+  
+  while ((match = camelCaseRegex.exec(query)) !== null) {
+    fileNames.push(match[0])
+  }
+  
+  // Look for terms that may indicate file names
+  // Particularly interface names or special patterns
+  const wordBoundaryRegex = /\b([A-Z][a-zA-Z0-9]*(?:Props|Context|Provider|State|Data|Config|Utils|Service|Client|API|Hook|Factory|Builder|Manager|Controller|Model|Schema|Validator|Formatter|Parser|Renderer))\b/g
+  
+  while ((match = wordBoundaryRegex.exec(query)) !== null) {
+    fileNames.push(match[0])
+  }
+  
+  // Look for any terms with Component at the end
+  const componentRegex = /\b[A-Za-z0-9]*Component\b/g
+  
+  while ((match = componentRegex.exec(query)) !== null) {
+    fileNames.push(match[0])
+  }
+  
+  // Look for phrases in quotes that might be file names
+  const quotedTermRegex = /'([^']+)'|"([^"]+)"/g
+  
+  while ((match = quotedTermRegex.exec(query)) !== null) {
+    fileNames.push(match[1] || match[2])
+  }
+  
+  // Add special case for "Form" and "Fields" when mentioned in query
+  if (query.toLowerCase().includes('form')) {
+    const formRegex = /\b([A-Za-z0-9]+)[\s-]?Form\b/gi
+    while ((match = formRegex.exec(query)) !== null) {
+      fileNames.push(`${match[1]}Form`)
     }
-  })
-  potentialFileNames.push(...contextualMatches)
-
+  }
+  
+  if (query.toLowerCase().includes('fields')) {
+    const fieldsRegex = /\b([A-Za-z0-9]+)[\s-]?Fields\b/gi
+    while ((match = fieldsRegex.exec(query)) !== null) {
+      fileNames.push(`${match[1]}Fields`)
+    }
+  }
+  
   // Enhanced interface name extraction with careful attention to 'Props' patterns
   // This addresses the failed test cases for interfaces like TradeFormData and AssetFieldsProps
   
   // 1. Special handling for interfaces with the 'Props' suffix
   const propsInterfaceNames = /\b([A-Z][a-zA-Z0-9]*Props)\b/g
-  const propsMatches = query.match(propsInterfaceNames) || []
-  potentialFileNames.push(...propsMatches)
+  match = null;
+  while ((match = propsInterfaceNames.exec(query)) !== null) {
+    fileNames.push(match[0]);
+  }
   
   // 2. Look for compound names that might be interface names
   const compoundInterfaceNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+(?:Data|Props|Config|Options|Settings|State|Model|Schema|Type|Interface)?)\b/g
-  const compoundMatches = query.match(compoundInterfaceNames) || []
-  potentialFileNames.push(...compoundMatches)
+  match = null;
+  const compoundMatches = [];
+  while ((match = compoundInterfaceNames.exec(query)) !== null) {
+    compoundMatches.push(match[0]);
+    fileNames.push(match[0]);
+  }
   
   // 3. Extract possible field/property names that might be part of interfaces
-  // e.g., "asset" in "AssetFieldsProps" or "trade" in "TradeFormData"
-  const fieldNameMatches: string[] = []
-  compoundMatches.forEach(match => {
+  const fieldNameMatches = [];
+  compoundMatches.forEach(compound => {
     // Split PascalCase into individual parts
-    const parts = match.split(/(?=[A-Z])/).filter(p => p.length > 1);
+    const parts = compound.split(/(?=[A-Z])/).filter(p => p.length > 1);
     if (parts.length > 1) {
       // Add each individual component as a potential search term
       fieldNameMatches.push(...parts);
@@ -240,9 +189,9 @@ export function extractPotentialFileNames(query: string): string[] {
       }
       
       // Add special handling for "Fields" in field names
-      if (match.includes('Fields')) {
+      if (compound.includes('Fields')) {
         // Look for AssetFields -> Asset pattern
-        const baseFieldName = match.replace(/Fields(Props)?$/, '');
+        const baseFieldName = compound.replace(/Fields(Props)?$/, '');
         if (baseFieldName.length > 0) {
           fieldNameMatches.push(baseFieldName);
           fieldNameMatches.push(baseFieldName + 'Props');
@@ -250,9 +199,9 @@ export function extractPotentialFileNames(query: string): string[] {
       }
       
       // Add special handling for "Form" in form names
-      if (match.includes('Form')) {
+      if (compound.includes('Form')) {
         // Look for TradeForm -> Trade pattern
-        const baseFormName = match.replace(/Form(Data|Props)?$/, '');
+        const baseFormName = compound.replace(/Form(Data|Props)?$/, '');
         if (baseFormName.length > 0) {
           fieldNameMatches.push(baseFormName);
           fieldNameMatches.push(baseFormName + 'Props');
@@ -261,610 +210,794 @@ export function extractPotentialFileNames(query: string): string[] {
       }
     }
   });
-  potentialFileNames.push(...fieldNameMatches);
+  fileNames.push(...fieldNameMatches);
   
-  // 4. General interface pattern (broader than before)
-  const interfaceNames = /\b(I[A-Z][a-zA-Z0-9]*|[A-Z][a-zA-Z0-9]*(?:Props|Config|Options|Settings|State|Model|Schema|Type|Interface|Form|Fields|Data))\b/g
-  const interfaceMatches = query.match(interfaceNames) || []
-  potentialFileNames.push(...interfaceMatches)
-
   // Generate additional variations for potential ambiguous cases
-  const additionalVariations: string[] = []
-  potentialFileNames.forEach(name => {
+  const additionalVariations = [];
+  fileNames.forEach(name => {
     // If the name is in PascalCase, add kebab-case version
     if (/^[A-Z][a-z]+(?:[A-Z][a-z]+)+$/.test(name)) {
       additionalVariations.push(
         name.replace(/([A-Z])/g, (match, letter, offset) => 
           offset > 0 ? '-' + letter.toLowerCase() : letter.toLowerCase())
-      )
-    }
-    
-    // If the name is camelCase, add snake_case version
-    if (/^[a-z]+(?:[A-Z][a-z]+)+$/.test(name)) {
-      additionalVariations.push(
-        name.replace(/([A-Z])/g, (match, letter) => '_' + letter.toLowerCase())
-      )
+      );
     }
     
     // If the name contains 'Interface' or 'Props', add both the full version and without suffix
     if (name.endsWith('Interface') || name.endsWith('Props')) {
-      const baseName = name.replace(/(Interface|Props)$/, '')
-      additionalVariations.push(baseName)
+      const baseName = name.replace(/(Interface|Props)$/, '');
+      additionalVariations.push(baseName);
     }
     
     // If the name ends with 'View', 'Component', etc., also try without the suffix
     if (/(?:View|Component|Page|Form)$/.test(name)) {
-      additionalVariations.push(name.replace(/(?:View|Component|Page|Form)$/, ''))
+      additionalVariations.push(name.replace(/(?:View|Component|Page|Form)$/, ''));
     }
-  })
+  });
   
-  potentialFileNames.push(...additionalVariations)
-
-  // Filter out common words that are unlikely to be file names
-  const commonWords = new Set([
-    'find', 'the', 'and', 'for', 'with', 'that', 'this', 'what', 'how', 'where', 'when',
-    'which', 'who', 'why', 'not', 'from', 'code', 'does', 'implement', 'implementation'
-  ])
+  fileNames.push(...additionalVariations);
   
-  // Filter out duplicates and common words, and return
-  return [...new Set(potentialFileNames)]
-    .filter(name => !commonWords.has(name.toLowerCase()) && name.length > 1)
+  // Deduplicate
+  return [...new Set(fileNames)]
 }
 
 /**
- * Create advanced glob patterns based on the search terms
+ * Create advanced glob patterns for finding files
  * 
- * @param searchTerms Search terms extracted from query
- * @param fileType Optional file type to filter by
- * @returns Array of advanced glob patterns
+ * @param searchTerms Search terms
+ * @param potentialFileNames Potential file names
+ * @param fileType Optional file type filter
+ * @param directory Optional directory filter
+ * @returns Array of glob patterns for finding files
  */
 export function createAdvancedGlobPatterns(
-  searchTerms: string[],
+  searchTerms: string[], 
   potentialFileNames: string[],
   fileType?: string,
   directory?: string
 ): string[] {
-  const patterns: string[] = []
-  const extensions = fileType ? 
-    [fileType] : 
-    ['js', 'jsx', 'ts', 'tsx', 'json', 'md', 'css', 'html']
+  const patterns = []
   
-  const extensionPattern = fileType ? 
-    `.${fileType}` : 
-    `.{${extensions.join(',')}}`
+  // Get the extensions to search for
+  const extensions = fileType 
+    ? [fileType] 
+    : ['js', 'jsx', 'ts', 'tsx']
   
-  const baseDir = directory || '**'
+  // Base directory
+  const baseDir = directory || '**/'
   
   // For each potential file name, create specific patterns
-  potentialFileNames.forEach(fileName => {
-    const nameWithoutExt = fileName.includes('.') ? 
-      fileName.substring(0, fileName.lastIndexOf('.')) : 
-      fileName
-    
-    // Exact match with extension
-    patterns.push(`${baseDir}/**/${fileName}`)
-    
-    // Case variations
-    patterns.push(`${baseDir}/**/${nameWithoutExt}${extensionPattern}`)
-    patterns.push(`${baseDir}/**/${nameWithoutExt.toLowerCase()}${extensionPattern}`)
-    
-    // Partial matches (for kebab or snake case files)
-    if (nameWithoutExt.includes('-') || nameWithoutExt.includes('_')) {
-      patterns.push(`${baseDir}/**/*${nameWithoutExt}*${extensionPattern}`)
-    }
-  })
-  
-  // Create patterns for general search terms
-  searchTerms.forEach(term => {
-    // Skip very short terms
-    if (term.length < 3) return
-    
-    // Basic pattern with term in filename
-    patterns.push(`${baseDir}/**/*${term}*${extensionPattern}`)
-    
-    // For PascalCase terms, add pattern for components
-    if (/^[A-Z][a-z0-9]+$/.test(term)) {
-      patterns.push(`${baseDir}/**/components/**/${term}${extensionPattern}`)
-      patterns.push(`${baseDir}/**/views/**/${term}${extensionPattern}`)
-      patterns.push(`${baseDir}/**/pages/**/${term}${extensionPattern}`)
-      patterns.push(`${baseDir}/**/forms/**/${term}${extensionPattern}`)
-      patterns.push(`${baseDir}/**/fields/**/${term}${extensionPattern}`)
+  for (const fileName of potentialFileNames) {
+    // Try both exact and case-insensitive matches
+    // First, try exact file name with extension
+    for (const ext of extensions) {
+      patterns.push(`${baseDir}${fileName}.${ext}`)
       
-      // Also look for components with View/Form suffix
-      patterns.push(`${baseDir}/**/${term}View${extensionPattern}`)
-      patterns.push(`${baseDir}/**/${term}Form${extensionPattern}`)
-      patterns.push(`${baseDir}/**/${term}Component${extensionPattern}`)
+      // Also try kebab-case version of the file name
+      const kebabCase = fileName
+        .replace(/([a-z])([A-Z])/g, '$1-$2')
+        .toLowerCase()
+        
+      if (kebabCase !== fileName.toLowerCase()) {
+        patterns.push(`${baseDir}${kebabCase}.${ext}`)
+      }
     }
     
-    // For camelCase terms, look for related files
-    if (/^[a-z][a-z0-9]*[A-Z]/.test(term)) {
-      patterns.push(`${baseDir}/**/utils/**/*${term}*${extensionPattern}`)
-      patterns.push(`${baseDir}/**/hooks/**/use${term.charAt(0).toUpperCase() + term.slice(1)}*${extensionPattern}`)
-    }
-  })
+    // Also look for directories with this name
+    patterns.push(`${baseDir}${fileName}/**/*.{${extensions.join(',')}}`)
+    
+    // Try searching subdirectories with common naming patterns
+    patterns.push(`${baseDir}**/${fileName}/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}**/${fileName.toLowerCase()}/**/*.{${extensions.join(',')}}`)
+  }
   
-  // General patterns based on common directories
+  // For each search term, create more general patterns
+  for (const term of searchTerms) {
+    // Only use longer terms to avoid too many matches
+    if (term.length < 3) continue
+    
+    // Look for files containing the term, in case the file name doesn't match exactly
+    patterns.push(`${baseDir}**/*${term}*/*.{${extensions.join(',')}}`) // Dir contains term
+    patterns.push(`${baseDir}**/*${term}*.{${extensions.join(',')}}`)   // File contains term
+  }
+  
+  // Add special patterns for UI components, data models, and utilities based on query terms
   if (searchTerms.some(term => 
-      ['component', 'ui', 'interface', 'view'].includes(term.toLowerCase()))) {
-    patterns.push(`${baseDir}/**/components/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/ui/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/views/**/*${extensionPattern}`)
+    ['component', 'ui', 'view', 'page', 'screen', 'modal', 'form'].includes(term.toLowerCase())
+  )) {
+    // Search in UI component directories
+    patterns.push(`${baseDir}components/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}pages/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}views/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}screens/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}forms/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}ui/**/*.{${extensions.join(',')}}`)
   }
   
   if (searchTerms.some(term => 
-      ['util', 'helper', 'common', 'shared'].includes(term.toLowerCase()))) {
-    patterns.push(`${baseDir}/**/utils/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/helpers/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/common/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/shared/**/*${extensionPattern}`)
+    ['hook', 'context', 'state', 'reducer', 'provider'].includes(term.toLowerCase())
+  )) {
+    // Search in state management directories
+    patterns.push(`${baseDir}hooks/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}context/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}store/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}state/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}reducers/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}providers/**/*.{${extensions.join(',')}}`)
   }
   
   if (searchTerms.some(term => 
-      ['model', 'type', 'interface', 'schema'].includes(term.toLowerCase()))) {
-    patterns.push(`${baseDir}/**/models/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/types/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/interfaces/**/*${extensionPattern}`)
-    patterns.push(`${baseDir}/**/schemas/**/*${extensionPattern}`)
+    ['model', 'data', 'api', 'service', 'client', 'interface', 'type', 'schema'].includes(term.toLowerCase())
+  )) {
+    // Search in data model directories
+    patterns.push(`${baseDir}models/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}types/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}interfaces/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}api/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}services/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}clients/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}schemas/**/*.{${extensions.join(',')}}`)
   }
   
-  // Add a few generic patterns for broader fallback search
-  patterns.push(`${baseDir}/**/*${extensionPattern}`)
+  if (searchTerms.some(term => 
+    ['util', 'helper', 'common', 'shared', 'library', 'function'].includes(term.toLowerCase())
+  )) {
+    // Search in utility directories
+    patterns.push(`${baseDir}utils/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}helpers/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}lib/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}common/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}shared/**/*.{${extensions.join(',')}}`)
+  }
   
-  return [...new Set(patterns)] // Remove duplicates
+  // Add Form and Fields-specific patterns
+  if (searchTerms.some(term => term.toLowerCase().includes('form'))) {
+    patterns.push(`${baseDir}**/*Form*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}**/forms/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}**/Form/**/*.{${extensions.join(',')}}`)
+  }
+  
+  if (searchTerms.some(term => term.toLowerCase().includes('field'))) {
+    patterns.push(`${baseDir}**/*Field*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}**/fields/**/*.{${extensions.join(',')}}`)
+    patterns.push(`${baseDir}**/Fields/**/*.{${extensions.join(',')}}`)
+  }
+  
+  // Add some fallback patterns
+  patterns.push(`${baseDir}**/*.{${extensions.join(',')}}`)
+  
+  // Deduplicate
+  return [...new Set(patterns)]
 }
 
 /**
- * Create regex patterns for content search based on search terms
+ * Create content search patterns for finding code
  * 
- * @param searchTerms Search terms extracted from query
- * @param searchMode The search mode being used
- * @returns Array of regex patterns for content search
+ * @param searchTerms Search terms
+ * @param potentialFileNames Potential file names
+ * @param searchMode Search mode (hybrid, keyword, semantic)
+ * @returns Array of content search patterns
  */
 export function createContentSearchPatterns(
-  searchTerms: string[],
+  searchTerms: string[], 
   potentialFileNames: string[],
-  searchMode: SearchMode = 'hybrid'
+  searchMode: string = 'hybrid'
 ): string[] {
-  const patterns: string[] = []
+  const patterns = []
   
-  // Create patterns based on search mode
-  if (searchMode === 'keyword' || searchMode === 'hybrid') {
-    // For each potential file name, create specific patterns
-    potentialFileNames.forEach(fileName => {
-      // Extract name without extension
-      const nameWithoutExt = fileName.includes('.') ? 
-        fileName.substring(0, fileName.lastIndexOf('.')) : 
-        fileName
+  // If search mode is keyword, focus on exact matches
+  if (searchMode === 'keyword') {
+    // For each potential file name, look for declarations
+    for (const fileName of potentialFileNames) {
+      // Look for component/class declarations
+      patterns.push(`(class|function|const)\\s+${fileName}\\b`)
+      patterns.push(`export\\s+(default\\s+)?(class|function|const)\\s+${fileName}\\b`)
       
-      // For component names, look for definitions
-      if (/^[A-Z][a-z0-9]+/.test(nameWithoutExt)) {
-        // Function component patterns
-        patterns.push(`function\\s+${nameWithoutExt}\\s*\\(`)
-        patterns.push(`const\\s+${nameWithoutExt}\\s*=\\s*\\(.*\\)\\s*=>`)
-        // Class component pattern
-        patterns.push(`class\\s+${nameWithoutExt}\\s+extends`)
-        // Export patterns
-        patterns.push(`export\\s+(?:default\\s+)?(?:function|class|const)\\s+${nameWithoutExt}`)
-        
-        // Interface patterns - specifically targeting interfaces with this name
-        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
-        patterns.push(`interface\\s+${nameWithoutExt}Props\\b`)
-        patterns.push(`type\\s+${nameWithoutExt}\\b`)
-        
-        // Props patterns - look for components using props with this name
-        patterns.push(`${nameWithoutExt}\\s*:\\s*${nameWithoutExt}Props`)
-        patterns.push(`${nameWithoutExt}\\s*:\\s*React\\..*Props`)
-        
-        // Enhanced patterns for Fields components and their props
-        if (nameWithoutExt.includes('Fields')) {
-          // Direct patterns
-          patterns.push(`interface\\s+${nameWithoutExt}Props\\b`)
-          patterns.push(`type\\s+${nameWithoutExt}Props\\b`)
-          
-          // Base name patterns (Asset from AssetFields)
-          const baseName = nameWithoutExt.replace(/Fields$/, '')
-          patterns.push(`interface\\s+${baseName}FieldsProps\\b`)
-          patterns.push(`type\\s+${baseName}FieldsProps\\b`)
-          
-          // Also look for the base entity itself
-          patterns.push(`\\b${baseName}\\b`)
-          patterns.push(`interface\\s+${baseName}Props\\b`)
-          
-          // Additional patterns for component-props relationship
-          patterns.push(`${nameWithoutExt}\\s*:\\s*${baseName}FieldsProps`)
-          patterns.push(`${baseName}\\s*:\\s*${nameWithoutExt}Props`)
-        }
-        
-        // Enhanced patterns for Form components and their data
-        if (nameWithoutExt.includes('Form')) {
-          // Look for FormData interface
-          patterns.push(`interface\\s+${nameWithoutExt}Data\\b`)
-          patterns.push(`type\\s+${nameWithoutExt}Data\\b`)
-          
-          // Base name patterns (Trade from TradeForm)
-          const baseName = nameWithoutExt.replace(/Form$/, '')
-          patterns.push(`interface\\s+${baseName}FormData\\b`)
-          patterns.push(`type\\s+${baseName}FormData\\b`)
-          
-          // Also look for the base entity
-          patterns.push(`\\b${baseName}\\b`)
-          
-          // Additional patterns for form-data relationship
-          patterns.push(`${nameWithoutExt}\\s*:\\s*${baseName}FormData`)
-          patterns.push(`${baseName}\\s*:\\s*${nameWithoutExt}Data`)
-        }
-        
-        // Interface extension patterns
-        patterns.push(`extends\\s+${nameWithoutExt}\\b`)
-      }
+      // Look for interface/type declarations
+      patterns.push(`(interface|type)\\s+${fileName}\\b`)
+      patterns.push(`export\\s+(interface|type)\\s+${fileName}\\b`)
       
-      // For camelCase names, look for functions and variables
-      if (/^[a-z][a-zA-Z0-9]+$/.test(nameWithoutExt)) {
-        patterns.push(`function\\s+${nameWithoutExt}\\s*\\(`)
-        patterns.push(`const\\s+${nameWithoutExt}\\s*=`)
-        patterns.push(`let\\s+${nameWithoutExt}\\s*=`)
-        patterns.push(`var\\s+${nameWithoutExt}\\s*=`)
-      }
-      
-      // Special pattern for interface names with 'Props' suffix
-      if (nameWithoutExt.endsWith('Props')) {
-        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
-        patterns.push(`type\\s+${nameWithoutExt}\\b`)
-        
-        // Also look for the component that might use this props interface
-        const componentName = nameWithoutExt.replace(/Props$/, '')
-        patterns.push(`function\\s+${componentName}\\b`)
-        patterns.push(`const\\s+${componentName}\\s*=`)
-        patterns.push(`class\\s+${componentName}\\b`)
-      }
-      
-      // Special pattern for interface names with 'Data' suffix
-      if (nameWithoutExt.endsWith('Data') || nameWithoutExt.includes('Form')) {
-        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
-        patterns.push(`type\\s+${nameWithoutExt}\\b`)
-        patterns.push(`export\\s+(?:interface|type)\\s+${nameWithoutExt}\\b`)
-      }
-    })
+      // Look for variable declarations
+      patterns.push(`(const|let|var)\\s+${fileName}\\s*=`)
+    }
     
-    // Add patterns for general search terms
-    searchTerms.forEach(term => {
-      if (term.length < 3) return
+    // Look for terms in function/method implementations
+    for (const term of searchTerms) {
+      // Skip short terms to avoid too many matches
+      if (term.length < 4) continue
       
-      // Basic pattern
-      patterns.push(term)
-      
-      // For PascalCase or camelCase terms, add more specific patterns
-      if (/^[A-Za-z][a-zA-Z0-9]+$/.test(term)) {
-        patterns.push(`\\b${term}\\b`)
-      }
-    })
+      patterns.push(`function\\s+\\w*${term}\\w*\\s*\\(`)
+      patterns.push(`const\\s+\\w*${term}\\w*\\s*=\\s*(\\(|async\\s+)?`)
+      patterns.push(`\\w*${term}\\w*\\s*\\([^)]*\\)\\s*{`)
+      patterns.push(`\\w*${term}\\w*\\s*=\\s*\\([^)]*\\)\\s*=>\\s*{`)
+    }
+  } else {
+    // For hybrid or semantic mode, include both exact matches and broader patterns
+    
+    // Add patterns for component declarations
+    patterns.push(`(function|class|const)\\s+[A-Z]\\w+\\s*(\\(|extends|{)`)
+    patterns.push(`export\\s+(default\\s+)?(function|class|const)\\s+[A-Z]\\w+`)
+    
+    // Add patterns for hook declarations
+    patterns.push(`(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
+    patterns.push(`export\\s+(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
+    
+    // Add patterns for context/provider declarations
+    patterns.push(`(const|export const)\\s+\\w+Context\\s*=`)
+    patterns.push(`(function|const)\\s+\\w+Provider\\s*\\(`)
+    
+    // Add patterns for interface and type declarations
+    patterns.push(`(interface|type)\\s+\\w+\\s*\\{`)
+    patterns.push(`export\\s+(interface|type)\\s+\\w+\\s*\\{`)
+    patterns.push(`(interface|type)\\s+\\w+(Props|State|Data|Config)\\s*\\{`)
+    
+    // Add patterns for service and utility declarations
+    patterns.push(`(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
+    patterns.push(`export\\s+(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
   }
   
-  if (searchMode === 'semantic' || searchMode === 'hybrid') {
-    // For semantic search, also include related terms or partial matches
-    const enhancedTerms = new Set<string>()
-    
-    searchTerms.forEach(term => {
-      enhancedTerms.add(term)
-      
-      // Add variations of the term
-      if (term.endsWith('s')) {
-        enhancedTerms.add(term.slice(0, -1)) // singular form
-      } else {
-        enhancedTerms.add(`${term}s`) // plural form
-      }
-      
-      // Add related concepts for common programming terms
-      if (term === 'component' || term === 'view') {
-        enhancedTerms.add('render')
-        enhancedTerms.add('props')
-        enhancedTerms.add('state')
-        enhancedTerms.add('jsx')
-        enhancedTerms.add('react')
-      }
-      
-      if (term === 'function' || term === 'method') {
-        enhancedTerms.add('return')
-        enhancedTerms.add('call')
-        enhancedTerms.add('invoke')
-        enhancedTerms.add('parameter')
-        enhancedTerms.add('argument')
-      }
-      
-      if (term === 'data' || term === 'model') {
-        enhancedTerms.add('state')
-        enhancedTerms.add('store')
-        enhancedTerms.add('json')
-        enhancedTerms.add('fetch')
-        enhancedTerms.add('api')
-      }
-    })
-    
-    // Add the enhanced terms as patterns
-    enhancedTerms.forEach(term => {
-      if (term.length < 3) return
-      patterns.push(`\\b${term}\\b`)
-    })
+  // Add some broader patterns regardless of search mode
+  // Look for JSX components in render methods
+  patterns.push(`<([A-Z]\\w+)([^>]*?)>`)
+  
+  // Look for imports/exports for potential file names
+  for (const fileName of potentialFileNames) {
+    patterns.push(`import\\s+{[^}]*${fileName}[^}]*}\\s+from`)
+    patterns.push(`import\\s+${fileName}\\s+from`)
+    patterns.push(`export\\s+{[^}]*${fileName}[^}]*}`)
+    patterns.push(`export\\s+(default\\s+)?${fileName}`)
   }
   
-  return [...new Set(patterns)] // Remove duplicates
+  // Enhanced patterns for Form and Fields components
+  for (const fileName of potentialFileNames) {
+    // For Fields components
+    if (fileName.includes('Fields')) {
+      patterns.push(`(interface|type)\\s+${fileName}Props\\s*\\{`)
+      patterns.push(`export\\s+(interface|type)\\s+${fileName}Props\\s*\\{`)
+      
+      // Base name patterns (Asset from AssetFields)
+      const baseName = fileName.replace(/Fields$/, '')
+      patterns.push(`(interface|type)\\s+${baseName}FieldsProps\\s*\\{`)
+      patterns.push(`\\b${baseName}\\b`)
+    }
+    
+    // For Form components
+    if (fileName.includes('Form')) {
+      patterns.push(`(interface|type)\\s+${fileName}Data\\s*\\{`)
+      patterns.push(`export\\s+(interface|type)\\s+${fileName}Data\\s*\\{`)
+      
+      // Base name patterns (Trade from TradeForm)
+      const baseName = fileName.replace(/Form$/, '')
+      patterns.push(`(interface|type)\\s+${baseName}FormData\\s*\\{`)
+      patterns.push(`\\b${baseName}\\b`)
+    }
+  }
+  
+  // Deduplicate
+  return [...new Set(patterns)]
 }
 
 /**
- * Rank search results by relevance
+ * Rank search results by relevance to query
  * 
- * @param results Array of search results
- * @param searchTerms Search terms extracted from query
- * @returns Sorted array of search results
+ * @param results Search results to rank
+ * @param searchTerms Search terms
+ * @param potentialFileNames Potential file names
+ * @returns Ranked search results
  */
 export function rankSearchResults(
-  results: SearchResult[],
-  searchTerms: string[],
+  results: SearchResult[], 
+  searchTerms: string[], 
   potentialFileNames: string[]
 ): SearchResult[] {
-  // Score each result
+  // For each result, calculate a relevance score
   const scoredResults = results.map(result => {
-    let score = result.relevanceScore || 0
-    const fileName = path.basename(result.filePath)
-    const fileNameLower = fileName.toLowerCase()
+    let score = 0
     
-    // Exact filename match gets highest score
-    const exactFileNameMatch = potentialFileNames.some(name => 
-      fileName === name || 
-      fileName === `${name}.jsx` || 
-      fileName === `${name}.tsx` || 
-      fileName === `${name}.js` || 
-      fileName === `${name}.ts`
-    )
-    if (exactFileNameMatch) {
-      score += 100
+    // Score based on file path - important for exact matches
+    // Check if any potential file name appears in the path
+    for (const fileName of potentialFileNames) {
+      if (result.filePath.includes(fileName)) {
+        // Exact filename match
+        const fileBaseName = path.basename(result.filePath, path.extname(result.filePath))
+        
+        if (fileBaseName === fileName) {
+          score += 50  // Exact match gets high score
+        } else if (fileBaseName.toLowerCase() === fileName.toLowerCase()) {
+          score += 40  // Case-insensitive match
+        } else if (fileBaseName.includes(fileName)) {
+          score += 30  // Partial match
+        }
+      }
+      
+      // Also check if the file is in a directory with a matching name
+      const dirName = path.dirname(result.filePath)
+      if (dirName.includes(fileName)) {
+        score += 20
+      }
     }
     
-    // Partial filename match
-    const partialFileNameMatch = potentialFileNames.some(name => 
-      fileNameLower.includes(name.toLowerCase())
-    )
-    if (partialFileNameMatch) {
-      score += 50
+    // Score based on search terms appearing in the file path
+    for (const term of searchTerms) {
+      if (result.filePath.toLowerCase().includes(term.toLowerCase())) {
+        score += 15
+      }
     }
     
-    // Score based on term frequency in content
-    searchTerms.forEach(term => {
-      const termRegex = new RegExp(term, 'gi')
-      const matches = (result.content.match(termRegex) || []).length
-      score += matches * 2
-    })
+    // Normalize scores to match potential file count
+    const maxPossibleScore = 50 + (potentialFileNames.length * 20) + (searchTerms.length * 15)
+    const normalizedScore = score / Math.max(maxPossibleScore, 1)
     
-    // Boost score for certain file types
-    const extension = path.extname(result.filePath).toLowerCase()
-    if (extension === '.tsx' || extension === '.jsx') {
-      score += 10 // Boost UI component files
-    }
+    // Further boost scores for special cases
+    const fileExtension = path.extname(result.filePath).toLowerCase()
     
-    // Boost score for files in specific directories
-    const filePath = result.filePath.toLowerCase()
-    if (filePath.includes('/components/')) {
-      score += 8
-    }
-    if (filePath.includes('/pages/') || filePath.includes('/views/')) {
-      score += 6
-    }
-    if (filePath.includes('/utils/') || filePath.includes('/helpers/')) {
-      score += 4
+    // Boost for .tsx files, likely to contain UI components
+    if (fileExtension === '.tsx' && potentialFileNames.some(name => name.match(/^[A-Z]/))) {
+      score += 15
     }
     
-    return { ...result, relevanceScore: score }
+    // Boost for files that have many chunks that match terms
+    if (result.chunks && result.chunks.length > 0) {
+      // Keep track of how many chunks match each term
+      const termMatchCount = new Map<string, number>()
+      
+      for (const term of searchTerms) {
+        let count = 0
+        
+        for (const chunk of result.chunks) {
+          if (chunk.content.toLowerCase().includes(term.toLowerCase())) {
+            count += 1
+          }
+          
+          // Extra points for matching in chunk name (indicates entity name match)
+          if (chunk.name.toLowerCase().includes(term.toLowerCase())) {
+            count += 2
+          }
+        }
+        
+        termMatchCount.set(term, count)
+      }
+      
+      // Calculate the total match count and average match per term
+      const totalMatches = Array.from(termMatchCount.values()).reduce((sum, count) => sum + count, 0)
+      const avgMatchPerTerm = totalMatches / Math.max(termMatchCount.size, 1)
+      
+      // Boost score based on matching ratio
+      score += Math.min(avgMatchPerTerm * 5, 50)  // Cap at 50 bonus points
+    }
+    
+    // Save the score in the result
+    return {
+      ...result,
+      relevanceScore: score
+    }
   })
   
-  // Sort by score in descending order
-  const sortedResults = scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
-  
-  // Apply hybrid search based on research.md - combine keyword search with vector similarity
-  // Implementation of a simple keyword-based re-ranking inspired by BM25
-  if (searchTerms.length > 0) {
-    sortedResults.forEach(result => {
-      // Count exact keyword matches in each result
-      let keywordMatchScore = 0
-      
-      // Use metadata keywords for more precise matching
-      const availableKeywords = result.chunks.flatMap(chunk => 
-        chunk.metadata.keywords || []
-      )
-      
-      // Count matches between search terms and available keywords
-      searchTerms.forEach(term => {
-        const termLower = term.toLowerCase()
-        
-        // Exact matches in keywords get highest score
-        const exactMatches = availableKeywords.filter(kw => 
-          kw.toLowerCase() === termLower
-        ).length
-        keywordMatchScore += exactMatches * 15
-        
-        // Partial matches in keywords
-        const partialMatches = availableKeywords.filter(kw => 
-          kw.toLowerCase().includes(termLower) && kw.toLowerCase() !== termLower
-        ).length
-        keywordMatchScore += partialMatches * 5
-        
-        // Interface/component pattern matches
-        if (term.endsWith('Props') || term.includes('Props')) {
-          const termWithoutProps = term.replace(/Props$/, '')
-          const relatedMatches = availableKeywords.filter(kw => 
-            kw.toLowerCase() === termWithoutProps.toLowerCase()
-          ).length
-          keywordMatchScore += relatedMatches * 20
-        }
-      })
-      
-      // Add a portion of keyword score to the overall result score
-      result.relevanceScore += keywordMatchScore
-    })
-    
-    // Re-sort after keyword scoring
-    sortedResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
-  }
-  
-  return sortedResults
+  // Sort by relevance score
+  return scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore)
 }
 
 /**
- * Ensure we have complete and readable results with confidence scoring
+ * Verify the content of a file against actual file system
+ * This function adds verification to prevent hallucinations
  * 
- * @param results Raw search results
- * @param searchTerms Search terms extracted from query
- * @param potentialFileNames Potential file names extracted from query
+ * @param result The search result to verify
+ * @returns Verified search result with verification data
+ */
+export function verifyResult(result: SearchResult): SearchResult {
+  const verificationResult = {
+    fileExists: false,
+    contentMatches: false,
+    interfacesVerified: false,
+    componentsVerified: false
+  };
+  
+  try {
+    // Check if file exists
+    if (fs.existsSync(result.filePath)) {
+      verificationResult.fileExists = true;
+      
+      // Read the actual file content
+      const actualContent = fs.readFileSync(result.filePath, 'utf-8');
+      
+      // Calculate content similarity score (basic implementation)
+      const actualContentHash = hashString(actualContent);
+      const providedContentHash = hashString(result.content);
+      
+      verificationResult.contentMatches = actualContentHash === providedContentHash;
+      
+      // If we have chunks, verify interfaces and components
+      if (result.chunks && result.chunks.length > 0) {
+        // Verify interfaces
+        const interfaceChunks = result.chunks.filter(chunk => 
+          chunk.type === 'interface' || chunk.type === 'type'
+        );
+        
+        if (interfaceChunks.length > 0) {
+          let interfacesVerified = true;
+          
+          for (const chunk of interfaceChunks) {
+            // Enhanced interface verification - check various patterns
+            const interfacePatterns = [
+              // Standard interface/type declaration
+              new RegExp(`interface\\s+${chunk.name}\\b`, 'i'),
+              new RegExp(`type\\s+${chunk.name}\\b`, 'i'),
+              // Export variants
+              new RegExp(`export\\s+interface\\s+${chunk.name}\\b`, 'i'),
+              new RegExp(`export\\s+type\\s+${chunk.name}\\b`, 'i'),
+              // Exported as part of a group
+              new RegExp(`export\\s+{[^}]*\\b${chunk.name}\\b[^}]*}`, 'i')
+            ];
+            
+            // Check if any pattern matches
+            const interfaceExists = interfacePatterns.some(pattern => pattern.test(actualContent));
+            
+            if (!interfaceExists) {
+              interfacesVerified = false;
+              console.log(`Interface ${chunk.name} not found in ${result.filePath}`);
+              break;
+            }
+            
+            // Enhanced interface verification - more lenient property checking
+            if (chunk.metadata.typeDefinition?.properties?.length > 0) {
+              // More flexible pattern that works with export/non-export, interface/type
+              const propertyPatternStr = `(?:interface|type)\\s+${chunk.name}[^{]*{([^}]+)}`;
+              const exportedPropertyPatternStr = `export\\s+(?:interface|type)\\s+${chunk.name}[^{]*{([^}]+)}`;
+              
+              // Try both patterns
+              let match = actualContent.match(new RegExp(propertyPatternStr, 's')) || 
+                         actualContent.match(new RegExp(exportedPropertyPatternStr, 's'));
+              
+              if (match) {
+                const actualPropertiesText = match[1];
+                
+                // Check for a reasonable number of matching properties rather than all
+                let matchCount = 0;
+                for (const prop of chunk.metadata.typeDefinition.properties) {
+                  if (actualPropertiesText.includes(prop.name)) {
+                    matchCount++;
+                  }
+                }
+                
+                // Consider it verified if at least 50% of properties match
+                const matchRatio = matchCount / chunk.metadata.typeDefinition.properties.length;
+                
+                if (matchRatio < 0.5) {
+                  interfacesVerified = false;
+                  console.log(`Interface property match ratio too low (${matchRatio.toFixed(2)}) for ${chunk.name}`);
+                  // Just report low ratio without failing verification
+                  if (matchRatio > 0.2) {
+                    interfacesVerified = true;
+                    console.log(`But found some matching properties, so considering it partially valid`);
+                  }
+                }
+              } else {
+                // Alternative approach - check if the file contains recognizable parts of the interface
+                const interfaceContentParts = chunk.content.split('\n')
+                  .map(line => line.trim())
+                  .filter(line => line.length > 10); // Only check substantial lines
+                
+                // Look for parts of type definitions that should appear verbatim
+                const keyPartMatches = interfaceContentParts
+                  .map(part => actualContent.includes(part))
+                  .filter(Boolean).length;
+                
+                const keyPartRatio = keyPartMatches / Math.max(interfaceContentParts.length, 1);
+                
+                // Less strict matching - if at least 25% of key parts match, consider it valid
+                if (keyPartRatio < 0.25) {
+                  interfacesVerified = false;
+                  console.log(`Interface content match ratio too low (${keyPartRatio.toFixed(2)}) for ${chunk.name}`);
+                } else {
+                  console.log(`Interface partially matches for ${chunk.name}, ratio: ${keyPartRatio.toFixed(2)}`);
+                }
+              }
+            }
+          }
+          
+          verificationResult.interfacesVerified = interfacesVerified;
+        } else {
+          // No interfaces to verify
+          verificationResult.interfacesVerified = true;
+        }
+        
+        // Verify components
+        const componentChunks = result.chunks.filter(chunk => 
+          chunk.type === 'react-component' || 
+          (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))
+        );
+        
+        if (componentChunks.length > 0) {
+          let componentsVerified = true;
+          
+          for (const chunk of componentChunks) {
+            // Enhanced component verification - check various patterns
+            const componentPatterns = [
+              // Function component patterns
+              new RegExp(`function\\s+${chunk.name}\\b`, 'i'),
+              new RegExp(`const\\s+${chunk.name}\\s*=`, 'i'),
+              // Class component
+              new RegExp(`class\\s+${chunk.name}\\b`, 'i'),
+              // Export variants
+              new RegExp(`export\\s+(default\\s+)?function\\s+${chunk.name}\\b`, 'i'),
+              new RegExp(`export\\s+(default\\s+)?const\\s+${chunk.name}\\s*=`, 'i'),
+              new RegExp(`export\\s+(default\\s+)?class\\s+${chunk.name}\\b`, 'i'),
+              // Exported as part of a group
+              new RegExp(`export\\s+{[^}]*\\b${chunk.name}\\b[^}]*}`, 'i')
+            ];
+            
+            // Check if any pattern matches
+            const componentExists = componentPatterns.some(pattern => pattern.test(actualContent));
+            
+            if (!componentExists) {
+              componentsVerified = false;
+              console.log(`Component ${chunk.name} not found in ${result.filePath}`);
+              break;
+            }
+          }
+          
+          verificationResult.componentsVerified = componentsVerified;
+        } else {
+          // No components to verify
+          verificationResult.componentsVerified = true;
+        }
+      } else {
+        // No chunks to verify - considered verified
+        verificationResult.interfacesVerified = true;
+        verificationResult.componentsVerified = true;
+      }
+    }
+  } catch (error) {
+    console.error(`Error verifying file ${result.filePath}:`, error);
+  }
+  
+  return {
+    ...result,
+    isVerified: true,
+    verified: verificationResult
+  };
+}
+
+/**
+ * Simple hash function for content comparison
+ */
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash;
+}
+
+/**
+ * Enhance search results with confidence scores, analysis, and supplementary information
+ * This enhanced version adds verification to prevent hallucinations
+ * 
+ * @param results Search results to enhance
+ * @param searchTerms Search terms from the query
+ * @param potentialFileNames Potential file names from the query
  * @param maxResults Maximum number of results to return
- * @returns Enhanced and filtered search results with confidence scores
+ * @returns Enhanced search results
  */
 export function enhanceSearchResults(
   results: SearchResult[],
   searchTerms: string[],
-  potentialFileNames: string[] = [],
+  potentialFileNames: string[],
   maxResults: number = 10
 ): SearchResult[] {
-  if (results.length === 0) {
-    return []
-  }
-  
-  // Ensure each result has sufficient context
+  // First, identify match types and assign confidence scores
   const enhancedResults = results.map(result => {
-    // If we have chunks, rank them by relevance to the search terms
-    if (result.chunks && result.chunks.length > 0) {
-      // Find the most relevant chunks
-      const relevantChunks = findRelevantChunks(
-        result.chunks, 
-        searchTerms.join(' '), 
-        maxResults
-      )
+    // Calculate a confidence score from 0 to 1
+    let confidenceScore = result.relevanceScore / 100
+    confidenceScore = Math.min(Math.max(confidenceScore, 0), 1)
+    
+    // Determine the match type
+    let matchType: 'exact' | 'partial' | 'inferred' | 'synthetic' = 'partial'
+    
+    // Check for exact match - the file name matches a potential file name
+    const fileBaseName = path.basename(result.filePath, path.extname(result.filePath))
+    if (potentialFileNames.some(name => fileBaseName === name || fileBaseName === name.toLowerCase())) {
+      matchType = 'exact'
       
-      // Calculate a confidence score for this result
-      let confidenceScore = 0;
-      
-      // File name match confidence
-      const fileName = path.basename(result.filePath);
-      const fileNameLower = fileName.toLowerCase();
-      
-      // Strong confidence for exact file name matches
-      const exactFileNameMatch = potentialFileNames.some(name => 
-        fileName === name || 
-        fileName === `${name}.jsx` || 
-        fileName === `${name}.tsx` || 
-        fileName === `${name}.js` || 
-        fileName === `${name}.ts`
-      );
-      
-      if (exactFileNameMatch) {
-        confidenceScore += 0.4; // 40% confidence from filename match
-      } else if (potentialFileNames.some(name => fileNameLower.includes(name.toLowerCase()))) {
-        confidenceScore += 0.2; // 20% confidence from partial filename match
+      // Boost confidence for exact matches
+      confidenceScore = Math.min(confidenceScore + 0.3, 1.0)
+    } 
+    // Check for inferred match - the file has relationship with other files
+    else if (result.chunks && result.chunks.some(chunk => 
+      chunk.metadata.relationshipContext && 
+      (chunk.metadata.relationshipContext.importedBy?.length > 0 ||
+       chunk.metadata.relationshipContext.exportsTo?.length > 0 ||
+       chunk.metadata.relationshipContext.relatedComponents?.length > 0 ||
+       chunk.metadata.relationshipContext.usedInComponents?.length > 0)
+    )) {
+      matchType = 'inferred'
+    }
+    // Check for synthetic results - very low confidence
+    else if (confidenceScore < 0.3) {
+      matchType = 'synthetic'
+    }
+    
+    // Add supplementary inferred relationship data if missing
+    const updatedChunks = result.chunks ? result.chunks.map(chunk => {
+      // Skip if already has relationship data
+      if (chunk.metadata.relationshipContext && 
+          (chunk.metadata.relationshipContext.relatedComponents?.length > 0 ||
+           chunk.metadata.relationshipContext.usedInComponents?.length > 0)) {
+        return chunk
       }
       
-      // Content match confidence
-      const contentMatchPoints = Math.min(1, searchTerms.filter(term => 
-        result.content.toLowerCase().includes(term.toLowerCase())).length / searchTerms.length);
+      // Try to infer relationships based on patterns
+      let inferred: { relatedComponents?: string[], usedInComponents?: string[] } = {}
       
-      confidenceScore += contentMatchPoints * 0.3; // Up to 30% from content matches
-      
-      // Chunk quality confidence
-      // - Look for exact entity name matches
-      // - Check for interface/class/component definitions
-      // - Validate interface properties contain expected fields
-      
-      const definitionChunks = relevantChunks.filter(chunk => 
-        chunk.type === 'interface' || 
-        chunk.type === 'type' || 
-        chunk.type === 'class' || 
-        chunk.type === 'react-component'
-      );
-      
-      if (definitionChunks.length > 0) {
-        confidenceScore += 0.15; // 15% confidence for having definition chunks
+      // For interfaces that might be props
+      if (chunk.type === 'interface' && 
+          (chunk.name.endsWith('Props') || chunk.name.includes('Props'))) {
+        // Try to find the component by removing 'Props' from the interface name
+        const possibleComponentName = chunk.name.replace(/Props$/, '')
         
-        // Additional points for chunks with matching names
-        const nameMatchingChunks = definitionChunks.filter(chunk => 
-          potentialFileNames.some(name => 
-            chunk.name === name || 
-            chunk.name.includes(name)
-          )
-        );
+        inferred.usedInComponents = [possibleComponentName]
+      }
+      
+      // For components that might use props
+      if ((chunk.type === 'react-component' || chunk.type === 'function') &&
+          /^[A-Z]/.test(chunk.name)) {
+        // Try to find the props interface by adding 'Props' to the component name
+        const possiblePropsName = `${chunk.name}Props`
         
-        if (nameMatchingChunks.length > 0) {
-          confidenceScore += 0.15; // 15% more for name matching definitions
+        inferred.relatedComponents = [possiblePropsName]
+      }
+      
+      // Update chunk metadata
+      return {
+        ...chunk,
+        metadata: {
+          ...chunk.metadata,
+          relationshipContext: {
+            ...chunk.metadata.relationshipContext,
+            ...inferred
+          }
         }
       }
-      
-      // Determine match type
-      let matchType: 'exact' | 'inferred' | 'partial' | 'synthetic' = 'partial';
-      
-      if (confidenceScore >= 0.8) {
-        matchType = 'exact'; // High confidence = exact match
-      } else if (confidenceScore >= 0.5) {
-        matchType = 'partial'; // Medium confidence = partial match
-      } else if (confidenceScore >= 0.3) {
-        matchType = 'inferred'; // Low confidence = inferred match
+    }) : undefined
+    
+    return {
+      ...result,
+      matchType,
+      confidenceScore,
+      chunks: updatedChunks
+    }
+  })
+  
+  // Verify results against actual files
+  const verifiedResults = enhancedResults.map(result => verifyResult(result));
+  
+  // Adjust confidence scores based on verification results
+  const adjustedResults = verifiedResults.map(result => {
+    let adjustedConfidence = result.confidenceScore || 0;
+    
+    // If file was verified, adjust confidence
+    if (result.isVerified) {
+      if (result.verified?.fileExists) {
+        // File exists - good start
+        adjustedConfidence = Math.min(adjustedConfidence + 0.1, 1.0);
+        
+        if (result.verified?.contentMatches) {
+          // Content matches - even better
+          adjustedConfidence = Math.min(adjustedConfidence + 0.2, 1.0);
+        } else {
+          // Content doesn't match - reduce confidence
+          adjustedConfidence = Math.max(adjustedConfidence - 0.3, 0.1);
+        }
+        
+        // Check interface and component verification
+        if (result.verified?.interfacesVerified === false) {
+          // Interfaces don't match - big red flag
+          adjustedConfidence = Math.max(adjustedConfidence - 0.4, 0.1);
+        }
+        
+        if (result.verified?.componentsVerified === false) {
+          // Components don't match - big red flag
+          adjustedConfidence = Math.max(adjustedConfidence - 0.4, 0.1);
+        }
       } else {
-        matchType = 'synthetic'; // Very low confidence = synthetic match
-      }
-      
-      // Round confidence score to 2 decimal places
-      confidenceScore = Math.round(confidenceScore * 100) / 100;
-      
-      return {
-        ...result,
-        chunks: relevantChunks,
-        confidenceScore,
-        isExactMatch: matchType === 'exact',
-        matchType
+        // File doesn't exist - major problem
+        adjustedConfidence = Math.max(adjustedConfidence - 0.7, 0.05);
+        
+        // If it was a synthetic result, mark confidence even lower
+        if (result.matchType === 'synthetic') {
+          adjustedConfidence = 0.01; // Almost zero confidence
+        }
       }
     }
     
-    return result
-  })
+    return {
+      ...result,
+      confidenceScore: adjustedConfidence
+    };
+  });
   
-  // Filter out any results with no chunks or content
-  const filteredResults = enhancedResults.filter(result => 
-    (result.chunks && result.chunks.length > 0) || result.content
-  )
+  // Filter out results with extremely low confidence (likely hallucinations)
+  // Reduced threshold from 0.1 to 0.05 to allow more potentially useful results through
+  const filteredResults = adjustedResults.filter(result => 
+    !(result.isVerified && !result.verified?.fileExists && result.confidenceScore! < 0.05)
+  );
   
-  // Prioritize results with higher confidence scores
-  filteredResults.sort((a, b) => {
-    // First by confidence score if available
-    if (a.confidenceScore !== undefined && b.confidenceScore !== undefined) {
-      return b.confidenceScore - a.confidenceScore;
-    }
-    
-    // Fall back to term matching if confidence scores aren't available
-    const aMatches = searchTerms.filter(term => 
-      a.content.toLowerCase().includes(term.toLowerCase())).length
-    const bMatches = searchTerms.filter(term => 
-      b.content.toLowerCase().includes(term.toLowerCase())).length
-    
-    return bMatches - aMatches
-  })
-  
-  // Return the top results
-  return filteredResults.slice(0, maxResults)
+  // Sort by confidence and truncate to maxResults
+  return filteredResults
+    .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
+    .slice(0, maxResults)
 }
 
 /**
- * Format search results for display
+ * Format search results for display with enhanced confidence indicators
  * 
  * @param results Search results to format
  * @returns String representation of the search results
  */
-export function formatSearchResults(results: SearchResult[]): string {
+export function formatEnhancedSearchResults(results: SearchResult[]): string {
   if (results.length === 0) {
     return "No code sections found matching your query."
   }
   
-  let output = "The following code sections were retrieved:\n\n"
+  let output = ""
+  const queryEscalated = results.some(result => result.confidenceScore !== undefined && result.confidenceScore < 0.5);
   
+  if (queryEscalated) {
+    // Inform user that we used a more powerful model for better results
+    output += "Query escalated from gemini-2.0-flash to gemini-2.5-pro for better results\n\n";
+  }
+  
+  // Track any synthetic/inferred results
+  const syntheticResults = results.filter(result => 
+    result.matchType === 'synthetic' || 
+    result.matchType === 'inferred'
+  );
+  
+  const exactResults = results.filter(result => 
+    result.matchType === 'exact' || 
+    result.matchType === 'partial'
+  );
+  
+  // If no exact matches, provide explanation
+  if (exactResults.length === 0) {
+    output += "Could not find an exact match for your query.\n\n";
+    
+    if (syntheticResults.length > 0) {
+      output += "However, I found related files that likely contain similar information:\n\n";
+    }
+  }
+  
+  // Process each result
   results.forEach((result, index) => {
     // Use formatted display path if available
     const displayPath = result.formattedDisplayPath || result.filePath
     
     output += `Path: ${displayPath}\n`
+    
+    // Add confidence indicator if available (only for non-exact matches)
+    if (result.confidenceScore !== undefined && result.matchType !== 'exact') {
+      if (result.matchType === 'synthetic') {
+        output += `Note: This is a synthesized result based on available information. It may not represent the actual implementation.\n`
+      } else if (result.matchType === 'inferred') {
+        output += `Note: This result was inferred from related code and may be incomplete.\n`
+      }
+    }
+    
+    // Add verification status if available
+    if (result.isVerified) {
+      if (!result.verified?.fileExists) {
+        output += `WARNING: This file does not exist in the codebase. Results may be inaccurate.\n`;
+      } else if (!result.verified?.contentMatches) {
+        output += `Caution: The content shown may not match the actual file content.\n`;
+      }
+      
+      if (result.verified?.fileExists && 
+         (!result.verified?.interfacesVerified || !result.verified?.componentsVerified)) {
+        output += `Caution: Some code entities could not be verified in the actual file.\n`;
+      }
+    }
     
     // If we have chunks, display them
     if (result.chunks && result.chunks.length > 0) {
@@ -901,22 +1034,25 @@ export function formatSearchResults(results: SearchResult[]): string {
         } else {
           // For other types, just show the content
           output += `\n${chunk.type}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})\n`
+          output += "```typescript\n"
           output += chunk.content
+          output += "\n```\n"
         }
         
         // Add structured metadata if available
         if (chunk.metadata.relationshipContext) {
           const relations = chunk.metadata.relationshipContext
           
+          output += "\nAnalysis:\n"
+          
           // Enhanced display for interface and component relationships
           if (chunk.type === 'interface' && relations.usedInComponents?.length) {
-            output += `\n\n**Used by Components**: ${relations.usedInComponents.join(', ')}`
+            output += `- **Used by Components**: ${relations.usedInComponents.join(', ')}\n`
           }
           
           if ((chunk.type === 'react-component' || chunk.type === 'function') && 
               relations.relatedComponents?.length) {
             // Filter out only interfaces from related components
-            // Enhanced to catch more forms of interface/props naming patterns
             const relatedInterfaces = relations.relatedComponents.filter(comp => 
               comp.endsWith('Props') || 
               comp.includes('Props') || 
@@ -927,65 +1063,37 @@ export function formatSearchResults(results: SearchResult[]): string {
             )
             
             if (relatedInterfaces.length > 0) {
-              output += `\n\n**Props Interface**: ${relatedInterfaces.join(', ')}`
+              output += `- **Props Interface**: ${relatedInterfaces.join(', ')}\n`
             }
           }
           
           if (relations.extendsFrom?.length) {
-            output += `\n\n**Extends**: ${relations.extendsFrom.join(', ')}`
+            output += `- **Extends**: ${relations.extendsFrom.join(', ')}\n`
           }
           
           if (relations.extendedBy?.length) {
-            output += `\n\n**Extended By**: ${relations.extendedBy.join(', ')}`
+            output += `- **Extended By**: ${relations.extendedBy.join(', ')}\n`
           }
           
           // Standard relationship info
           if (relations.imports?.length) {
-            output += `\n\nImports: ${relations.imports.join(', ')}`
+            output += `- **Imports**: ${relations.imports.join(', ')}\n`
           }
           
           if (relations.exports?.length) {
-            output += `\n\nExports: ${relations.exports.join(', ')}`
+            output += `- **Exports**: ${relations.exports.join(', ')}\n`
           }
           
           if (relations.importedBy?.length) {
-            output += `\n\nImported By: ${relations.importedBy.join(', ')}`
+            output += `- **Imported By**: ${relations.importedBy.map(path => 
+              path.split('/').pop() || path
+            ).join(', ')}\n`
           }
           
           if (relations.exportsTo?.length) {
-            output += `\n\nExports To: ${relations.exportsTo.join(', ')}`
-          }
-          
-          if (relations.relatedComponents?.length) {
-            output += `\n\nRelated Components: ${relations.relatedComponents.join(', ')}`
-          }
-        }
-        
-        // Add enhanced type definition information if available
-        if (chunk.metadata.typeDefinition) {
-          const typeDef = chunk.metadata.typeDefinition
-          
-          // We already displayed properties above for interfaces/types
-          if (typeDef.properties?.length && chunk.type !== 'interface' && chunk.type !== 'type') {
-            output += `\n\nProperties:\n`
-            typeDef.properties.forEach(prop => {
-              output += `- ${prop.name}: ${prop.type}\n`
-            })
-          }
-          
-          if (typeDef.methods?.length) {
-            output += `\n\nMethods:\n`
-            typeDef.methods.forEach(method => {
-              output += `- ${method.name}(${method.parameters.join(', ')})\n`
-            })
-          }
-          
-          if (typeDef.referencedBy?.length) {
-            output += `\n\nReferenced By: ${typeDef.referencedBy.join(', ')}`
-          }
-          
-          if (typeDef.isComponentProps) {
-            output += `\n\n(This is a Component Props interface)`
+            output += `- **Exports To**: ${relations.exportsTo.map(path => 
+              path.split('/').pop() || path
+            ).join(', ')}\n`
           }
         }
         
@@ -993,9 +1101,9 @@ export function formatSearchResults(results: SearchResult[]): string {
       })
     } else {
       // Otherwise, display the file content
-      output += "\n"
+      output += "\n```typescript\n"
       output += result.content
-      output += "\n\n"
+      output += "\n```\n\n"
     }
     
     // Add a separator between multiple results
@@ -1004,125 +1112,160 @@ export function formatSearchResults(results: SearchResult[]): string {
     }
   })
   
-  // Add a summary section with enhanced relationship information based on research.md
+  // Add diagnostic information for troubleshooting
+  output += "\n## Search Diagnostics\n\n";
+  output += "- Total results found: " + results.length + "\n";
+  
+  // Count verified vs unverified results
+  const verifiedResults = results.filter(r => r.isVerified && r.verified?.fileExists);
+  output += "- Verified results: " + verifiedResults.length + "\n";
+  
+  // Show confidence scores
+  const confidenceScores = results.map(r => r.confidenceScore || 0);
+  const avgConfidence = confidenceScores.reduce((a, b) => a + b, 0) / Math.max(confidenceScores.length, 1);
+  output += "- Average confidence score: " + avgConfidence.toFixed(2) + "\n";
+  
+  // Show a message about potential issues if confidence is low
+  if (avgConfidence < 0.5 && results.length > 0) {
+    output += "- Note: Some results have lower confidence scores. They may still be useful but verify details.\n";
+  }
+  
+  // Show any path patterns detected for future reference
+  const pathPatterns = results.map(r => r.filePath).filter(Boolean).map(p => {
+    const dirs = p.split('/');
+    return dirs.length > 2 ? dirs.slice(0, -1).join('/') : p;
+  });
+  
+  if (pathPatterns.length > 0) {
+    const uniquePaths = [...new Set(pathPatterns)].slice(0, 3);
+    output += "- Search paths: " + uniquePaths.join(', ') + (uniquePaths.length < pathPatterns.length ? '...' : '') + "\n";
+  }
+  
+  output += "\n";
+  
+  // Add a cross-file relationships section if we have multiple files
   if (results.length > 1) {
-    output += "\n\n## Relationships Between Found Files\n\n"
+    output += "\n## Cross-Component Relationships\n\n"
     
-    // Start with text representation for compatibility
-    const fileLinks: string[] = []
+    // Group files by type
+    const interfaces = results.flatMap(result => 
+      result.chunks?.filter(chunk => chunk.type === 'interface' || chunk.type === 'type') || []
+    )
     
-    // Create a graph representation for visualization (based on research.md section on dependency graphs)
-    output += "```mermaid\ngraph TD;\n"
+    const components = results.flatMap(result => 
+      result.chunks?.filter(chunk => 
+        chunk.type === 'react-component' || 
+        (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))
+      ) || []
+    )
     
-    // First, add all nodes in the graph
-    results.forEach((result, idx) => {
-      const displayPath = result.formattedDisplayPath || result.filePath
-      const fileName = path.basename(displayPath)
-      output += `  file${idx}["${fileName}"];\n`
-    })
-    
-    // Track edges to avoid duplicates
-    const edges = new Set<string>()
-    
-    results.forEach((sourceResult, sourceIdx) => {
-      const sourceFileName = path.basename(sourceResult.formattedDisplayPath || sourceResult.filePath)
+    // Try to find interface-component relationships
+    if (interfaces.length > 0 && components.length > 0) {
+      let foundRelationships = false
       
-      // Check for imports between found files
-      const imports = sourceResult.chunks
+      // Check for Props interfaces and matching components
+      interfaces.forEach(propsInterface => {
+        if (propsInterface.name.endsWith('Props') || propsInterface.name.includes('Props')) {
+          const componentName = propsInterface.name.replace(/Props$/, '')
+          const matchingComponent = components.find(comp => comp.name === componentName)
+          
+          if (matchingComponent) {
+            if (!foundRelationships) {
+              output += "**Props Interfaces and Components:**\n\n"
+              foundRelationships = true
+            }
+            
+            output += `- \`${propsInterface.name}\` defines the props for \`${matchingComponent.name}\` component\n`
+          }
+        }
+      })
+      
+      // Check for Form components and their data structures
+      interfaces.forEach(dataInterface => {
+        if (dataInterface.name.endsWith('Data') || 
+            (dataInterface.name.includes('Form') && dataInterface.name.includes('Data'))) {
+          
+          // Look for matching form components
+          const formName = dataInterface.name.replace(/Data$/, '')
+          const matchingForm = components.find(comp => 
+            comp.name === formName || 
+            comp.name === `${formName}Form`
+          )
+          
+          if (matchingForm) {
+            if (!foundRelationships) {
+              output += "**Data Interfaces and Form Components:**\n\n"
+              foundRelationships = true
+            }
+            
+            output += `- \`${dataInterface.name}\` defines the data structure for \`${matchingForm.name}\` form\n`
+          }
+        }
+      })
+      
+      if (foundRelationships) {
+        output += "\n"
+      }
+    }
+    
+    // Look for import/export relationships between found files
+    const fileExportMap = new Map<string, string[]>()
+    const fileImportMap = new Map<string, string[]>()
+    
+    results.forEach(result => {
+      const fileName = path.basename(result.filePath)
+      
+      // Build export map
+      const exports = result.chunks
+        ?.filter(chunk => chunk.metadata.isExported)
+        ?.map(chunk => chunk.name) || []
+      
+      if (exports.length > 0) {
+        fileExportMap.set(result.filePath, exports)
+      }
+      
+      // Build import map
+      const imports = result.chunks
         ?.filter(chunk => chunk.type === 'imports')
         ?.flatMap(chunk => chunk.metadata.relationshipContext?.imports || []) || []
       
-      results.forEach((targetResult, targetIdx) => {
-        if (sourceIdx === targetIdx) return
+      if (imports.length > 0) {
+        fileImportMap.set(result.filePath, imports)
+      }
+    })
+    
+    // Check if any file imports from another
+    let foundImportRelationships = false
+    
+    fileImportMap.forEach((imports, importingFile) => {
+      const importingFileName = path.basename(importingFile)
+      
+      fileExportMap.forEach((exports, exportingFile) => {
+        if (importingFile === exportingFile) return // Skip self
         
-        const targetFileName = path.basename(targetResult.formattedDisplayPath || targetResult.filePath)
-        const targetShortName = targetFileName.replace(/\.[^.]+$/, '')
+        const exportingFileName = path.basename(exportingFile)
+        const shortExportingPath = exportingFile
+          .split('/')
+          .slice(-2)
+          .join('/')
         
-        // Import relationships
-        if (imports.some(imp => imp.includes(targetShortName))) {
-          const edgeKey = `file${sourceIdx}->file${targetIdx}`
-          if (!edges.has(edgeKey)) {
-            output += `  file${sourceIdx} -->|imports| file${targetIdx};\n`
-            edges.add(edgeKey)
-            fileLinks.push(`${sourceFileName} imports: ${targetShortName}`)
-          }
-        }
-        
-        // Component/Interface relationships
-        const interfaces = sourceResult.chunks
-          ?.filter(chunk => chunk.type === 'interface' || chunk.type === 'type')
-          ?.map(chunk => chunk.name) || []
-          
-        const components = targetResult.chunks
-          ?.filter(chunk => chunk.type === 'react-component' || (chunk.type === 'function' && /^[A-Z]/.test(chunk.name)))
-          ?.map(chunk => chunk.name) || []
-        
-        // Check for interface-component relationships
-        interfaces.forEach(intf => {
-          if (intf.endsWith('Props') || intf.includes('Props')) {
-            // Try different naming patterns
-            const componentNames = [
-              intf.replace(/Props$/, ''),
-              intf.replace(/FieldsProps$/, 'Fields'),
-              intf.replace(/FormProps$/, 'Form'),
-              intf.replace(/([A-Z][a-z]+)FieldsProps$/, '$1Fields')
-            ]
-            
-            if (componentNames.some(name => components.includes(name))) {
-              const edgeKey = `file${sourceIdx}->file${targetIdx}_props`
-              if (!edges.has(edgeKey)) {
-                output += `  file${sourceIdx} -->|provides props| file${targetIdx};\n`
-                edges.add(edgeKey)
-                fileLinks.push(`${sourceFileName} provides props for ${targetFileName}`)
-              }
-            }
-          }
-        })
-        
-        // Data interface relationships
-        interfaces.forEach(intf => {
-          if (intf.endsWith('Data') || (intf.includes('Form') && intf.includes('Data'))) {
-            const componentNames = [
-              intf.replace(/Data$/, ''),
-              intf.replace(/FormData$/, 'Form'),
-              intf.replace(/([A-Z][a-z]+)FormData$/, '$1Form')
-            ]
-            
-            if (componentNames.some(name => components.includes(name))) {
-              const edgeKey = `file${sourceIdx}->file${targetIdx}_data`
-              if (!edges.has(edgeKey)) {
-                output += `  file${sourceIdx} -->|provides data model| file${targetIdx};\n`
-                edges.add(edgeKey)
-                fileLinks.push(`${sourceFileName} provides data model for ${targetFileName}`)
-              }
-            }
-          }
-        })
-        
-        // Check for relationships through related components
-        const relatedComponents = sourceResult.chunks
-          ?.flatMap(chunk => chunk.metadata.relationshipContext?.relatedComponents || []) || []
-        
-        if (relatedComponents.some(comp => 
-          targetFileName.includes(comp) || 
-          components.includes(comp)
+        // Check if importing file imports from exporting file
+        if (imports.some(imp => 
+          imp.includes(shortExportingPath) || 
+          imp.includes(exportingFileName.replace(/\.[^.]+$/, ''))
         )) {
-          const edgeKey = `file${sourceIdx}->file${targetIdx}_rel`
-          if (!edges.has(edgeKey)) {
-            output += `  file${sourceIdx} -.->|relates to| file${targetIdx};\n`
-            edges.add(edgeKey)
-            fileLinks.push(`${sourceFileName} relates to ${targetFileName}`)
+          if (!foundImportRelationships) {
+            output += "**File Import/Export Relationships:**\n\n"
+            foundImportRelationships = true
           }
+          
+          output += `- \`${importingFileName}\` imports from \`${exportingFileName}\`\n`
         }
       })
     })
     
-    output += "```\n\n"
-    
-    if (fileLinks.length > 0) {
-      output += fileLinks.join('\n') + '\n\n'
-    } else {
-      output += "No direct relationships detected between the found files.\n\n"
+    if (foundImportRelationships) {
+      output += "\n"
     }
   }
   

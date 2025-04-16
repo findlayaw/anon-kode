@@ -36,10 +36,11 @@ import {
   createContentSearchPatterns, 
   SearchResult,
   rankSearchResults,
-  enhanceSearchResults
+  verifyResult
 } from './searchUtils'
-// Use the enhanced search results formatter
+// Use the enhanced search results modules
 import { formatEnhancedSearchResults } from './formatSearchResults'
+import { enhanceSearchResults, validateEntityReferences } from './enhanceSearchResults'
 
 const inputSchema = z.strictObject({
   information_request: z
@@ -258,9 +259,44 @@ export const ImprovedContextEngine = {
     console.log(`Found ${filePaths.length} file paths in LLM response`)
 
     // If no results from LLM query, or it didn't find enough files,
-    // perform an expanded direct search to complement or replace LLM results
+    // Determine if we should try using the large model instead
     if (hasNoResults || filePaths.length < 2) {
-      console.log('LLM did not find sufficient results, performing direct search...')
+      console.log('Small model did not find sufficient results, escalating to large model...')
+      
+      // Here we would call the progressive query escalation with the large model
+      // This will be implemented using the progressive query escalation module
+      try {
+        const { executeProgressiveQuery } = require('./progressiveQueryEscalation')
+        const queryResult = await executeProgressiveQuery(
+          information_request,
+          search_filters,
+          toolUseContext,
+          canUseTool,
+          searchTools,
+          contextEngineCanUseTool
+        )
+        
+        if (queryResult.successful) {
+          const escalatedResponse = queryResult.response
+          
+          // Extract the file paths from the escalated response
+          const escalatedPathRegex = /Path:\s*([^\n]+)/g
+          let match
+          while ((match = escalatedPathRegex.exec(escalatedResponse)) !== null) {
+            if (match[1] && !filePaths.includes(match[1].trim())) {
+              filePaths.push(match[1].trim())
+            }
+          }
+          
+          console.log(`Found ${filePaths.length} total file paths after escalation`)
+        }
+      } catch (error) {
+        console.error('Error during query escalation:', error)
+      }
+      
+      // If we still don't have enough results, perform a direct search
+      if (filePaths.length < 2) {
+        console.log('Still insufficient results, performing direct search...')
       
       // Adjust search strategy based on query type
       if (hasUIRelatedTerms) {
@@ -314,7 +350,27 @@ export const ImprovedContextEngine = {
                 if (fs.statSync(fullPath).isDirectory()) return false
 
                 // Check if file name contains our search term
-                return file.toLowerCase().includes(nameWithoutExt.toLowerCase())
+                const fileNameMatches = file.toLowerCase().includes(nameWithoutExt.toLowerCase())
+                
+                // For special component/interface patterns, do additional checks
+                let specialPatternMatch = false;
+                
+                // AssetFieldsProps -> AssetFields pattern
+                if (nameWithoutExt.endsWith('Fields') && file.includes(nameWithoutExt.replace(/Fields$/, '') + 'Fields')) {
+                  specialPatternMatch = true;
+                }
+                
+                // TradeFormData -> TradeForm pattern
+                if (nameWithoutExt.endsWith('Form') && file.includes(nameWithoutExt.replace(/Form$/, '') + 'Form')) {
+                  specialPatternMatch = true;
+                }
+                
+                // Component -> Props interface pattern
+                if (nameWithoutExt.endsWith('Props') && file.includes(nameWithoutExt.replace(/Props$/, ''))) {
+                  specialPatternMatch = true;
+                }
+                
+                return fileNameMatches || specialPatternMatch;
               })
               .map(file => path.join(dirPattern, file))
 
@@ -394,6 +450,42 @@ export const ImprovedContextEngine = {
             normalizedPath = mostRelevantPath
           } else {
             console.log(`No similar paths found for ${normalizedPath}`)
+            
+            // Special handling for interfaces and types - they may be in a file rather than being a file
+            // Check if this looks like an interface/type name
+            if (normalizedPath.includes('Data') || normalizedPath.includes('Props') || 
+                normalizedPath.includes('Interface') || normalizedPath.includes('Type')) {
+              // Look for potential type definition files
+              const typeDirPatterns = ['types', 'interfaces', 'models']
+              const entityName = path.basename(normalizedPath, path.extname(normalizedPath))
+              
+              for (const dirPattern of typeDirPatterns) {
+                try {
+                  const typeDir = path.join(path.dirname(normalizedPath), dirPattern)
+                  if (fs.existsSync(typeDir)) {
+                    // Look for files in this directory that might contain the entity
+                    const files = fs.readdirSync(typeDir)
+                    for (const file of files) {
+                      const typePath = path.join(typeDir, file)
+                      if (fs.statSync(typePath).isFile()) {
+                        // Read the file to check if it contains the entity
+                        const content = fs.readFileSync(typePath, 'utf-8')
+                        if ((content.includes(`interface ${entityName}`) || 
+                             content.includes(`type ${entityName}`)) && 
+                            !filePaths.includes(typePath)) {
+                          // Found a potential match!
+                          console.log(`Found entity ${entityName} in ${typePath}`)
+                          filePaths.push(typePath)
+                        }
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.error(`Error checking type directory: ${error}`)
+                }
+              }
+            }
+            
             continue
           }
         } else {

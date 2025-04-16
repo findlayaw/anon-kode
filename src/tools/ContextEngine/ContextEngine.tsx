@@ -163,10 +163,43 @@ export const ContextEngine = {
         })
       }
 
-      // Add filters to the response if they were applied
-      if (filters.length > 0) {
-        formattedResponse = `Search filters applied: ${filters.join(', ')}\n\n${formattedResponse}`
+      // Add search metadata for diagnostics
+      const searchMetadata = [
+        `Search filters: ${filters.length > 0 ? filters.join(', ') : 'none'}`,
+        `Search mode: ${search_mode}`,
+        `Model: ${result.modelUsed === 'small' ? smallModelName : largeModelName}`,
+        `Escalated: ${result.escalated ? 'Yes' : 'No'}`,
+        `Duration: ${(result.durationMs / 1000).toFixed(2)}s`
+      ];
+      
+      // Add diagnostic info if result doesn't contain useful content
+      // Enhanced detection of "no content" results with more specific patterns
+      if (result.response.includes("couldn't find") || 
+          result.response.includes("no results found") ||
+          result.response.includes("no matching files") ||
+          result.response.includes("I couldn't find") ||
+          (result.response.includes("no content") && !result.response.includes("Path:"))) {
+        searchMetadata.push("Diagnostic Information:");
+        searchMetadata.push("- Search may have failed due to entity naming mismatches");
+        searchMetadata.push("- Try searching for a more general pattern or directory");
+        searchMetadata.push("- If looking for an interface, try searching for its container file");
+        searchMetadata.push("- For components, searching by directory can sometimes be more effective");
+        searchMetadata.push("- Try a reformulated query with different terms");
+        
+        // If the original query contains certain patterns, give specific advice
+        if (information_request.match(/\b([A-Z][a-zA-Z0-9]*(?:Props|Data|Interface))\b/)) {
+          searchMetadata.push("- For interfaces like TradeFormData, try searching for 'types.ts' files");
+          searchMetadata.push("- Try searching for the base name (e.g., 'TradeForm' instead of 'TradeFormData')");
+        }
+        
+        if (information_request.match(/\b([A-Z][a-zA-Z0-9]*(?:Component|Service))\b/)) {
+          searchMetadata.push("- For components, try looking in common UI directories like 'components/'");
+          searchMetadata.push("- Try searching by feature name rather than component name");
+        }
       }
+      
+      // Add the metadata to the response
+      formattedResponse = `${searchMetadata.join('\n')}\n\n${formattedResponse}`;
 
       yield {
         type: 'result',

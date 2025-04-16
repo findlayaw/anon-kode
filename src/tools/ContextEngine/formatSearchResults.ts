@@ -18,11 +18,26 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
   }
   
   let output = ""
+  
+  // Check if any results have low confidence (indicating escalation is likely)
   const queryEscalated = results.some(result => result.confidenceScore !== undefined && result.confidenceScore < 0.5);
+  
+  // Check if any results were verified against the file system
+  const verifiedResults = results.filter(result => result.isVerified);
+  const invalidResults = verifiedResults.filter(result => !result.verified?.fileExists);
+  
+  // Provide a summary of verification results
+  if (verifiedResults.length > 0) {
+    if (invalidResults.length > 0) {
+      output += `WARNING: ${invalidResults.length} of ${results.length} results could not be verified to exist in the codebase.\n\n`;
+    } else {
+      output += `All results verified against the actual code files.\n\n`;
+    }
+  }
   
   if (queryEscalated) {
     // Inform user that we used a more powerful model for better results
-    output += "Query escalated from gemini-2.0-flash to gemini-2.5-pro-preview-03-25 for better results\n\n";
+    output += "Query escalated from gemini-2.0-flash to gemini-2.5-pro for better results\n\n";
   }
   
   // Track any synthetic/inferred results

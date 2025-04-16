@@ -410,22 +410,53 @@ export async function executeProgressiveQuery(
     }
     
     // Check if the response indicates no results or errors
+    // Reduced list of indicators to be less aggressive
     const noResultsIndicators = [
-      "unable to find", "couldn't find", "could not find",
-      "no results", "no files", "not found",
-      "facing issues", "unable to provide", "unable to locate",
-      "sorry", "i apologize", "apologize", "insufficient",
-      "no matching", "no relevant", "cannot locate",
-      "no content", "(no content)"
+      "couldn't find", "could not find",
+      "no results found", "no files found", 
+      "unable to locate",
+      "no matching files", "no relevant files", "cannot locate",
+      "no content found", "no relevant content"
     ];
     
+    // Check for hallucination indicators - reduced and focused on stronger signals
+    const hallucinationIndicators = [
+      "probably", "presumably", 
+      "not entirely clear",
+      "inferring", "i think", 
+      "cannot determine", "unable to verify"
+    ];
+    
+    // Check for structural issues in the response
     const isIncompleteAnalysis = !responseText.includes('Analysis:') || 
                                 !responseText.includes('Path:') ||
                                 responseText.length < 300;
     
+    // Check for hallucination patterns - much more focused approach
+    // Only consider it a hallucination if uncertainty indicators appear multiple times
+    // and are specifically related to core content
+    const uncertaintyCount = hallucinationIndicators.filter(indicator =>
+      responseText.toLowerCase().includes(indicator)
+    ).length;
+    
+    const hasExplicitUncertainty = responseText.toLowerCase().includes("low confidence") ||
+                                 responseText.toLowerCase().includes("unable to verify") ||
+                                 responseText.toLowerCase().includes("cannot determine");
+    
+    // Only flag as hallucination if multiple strong signals 
+    const hasHallucinations = (uncertaintyCount >= 3) || 
+                            (hasExplicitUncertainty && uncertaintyCount >= 2);
+    
+    // Check for low confidence markers
+    const hasLowConfidence = responseText.toLowerCase().includes('confidence') && 
+                            (responseText.toLowerCase().includes('low confidence') ||
+                             responseText.toLowerCase().includes('not confident') ||
+                             responseText.toLowerCase().includes('uncertain'));
+    
+    // Mark as needing escalation if any issues detected
     const hasNoResults = noResultsIndicators.some(indicator =>
       responseText.toLowerCase().includes(indicator)
-    ) || isIncompleteAnalysis;
+    ) || isIncompleteAnalysis || hasHallucinations || hasLowConfidence;
     
     // If the small model found results, return them
     if (!hasNoResults) {
@@ -522,14 +553,80 @@ export async function executeProgressiveQuery(
   } catch (error) {
     logError(error);
     
-    // Both models failed, return an error message
+    // Both models failed, try a reformulated query as a final fallback
+    console.log('[Progressive Query] Both models failed, attempting query reformulation...');
+    
+    // Extract potential entities and file types from the original query
+    const entityMatch = information_request.match(/\b([A-Z][a-zA-Z0-9]*(?:Component|Service|Props|Data|Interface|Form|Fields|Client|API|Helper|Utils|Context|Provider)?)\b/g);
+    const potentialEntities = entityMatch ? Array.from(new Set(entityMatch)) : [];
+    
+    // Create a simplified and reformulated query focusing just on finding files
+    let reformulatedQuery = `Find all files in the codebase related to ${potentialEntities.join(', ')}.`;
+    
+    if (potentialEntities.length === 0) {
+      // If no clear entities, extract key terms
+      const terms = information_request.split(/\s+/)
+        .filter(term => term.length > 3 && !["find", "show", "where", "what", "which", "implement", "implementation"].includes(term.toLowerCase()));
+      
+      if (terms.length > 0) {
+        reformulatedQuery = `Find all files containing these terms: ${terms.join(', ')}.`;
+      }
+    }
+    
+    console.log(`[Progressive Query] Reformulated query: ${reformulatedQuery}`);
+    
+    // Create a new user message with the reformulated query
+    const reformulatedUserMessage = createUserMessage(reformulatedQuery);
+    
+    try {
+      // Last attempt with the large model and reformulated query
+      const reformStartTime = Date.now();
+      const lastResponse = await lastX(
+        query(
+          [reformulatedUserMessage],
+          [LARGE_MODEL_PROMPT],
+          context,
+          contextEngineCanUseTool,
+          modifiedContext,
+        ),
+      );
+      
+      const reformDuration = Date.now() - reformStartTime;
+      
+      if (lastResponse.type !== 'assistant') {
+        throw new Error(`Invalid response from API`);
+      }
+      
+      const data = lastResponse.message.content.filter(_ => _.type === 'text');
+      let responseText = data.map(item => item.text).join('\n');
+      
+      // If we got any results, format them with a note about the fallback
+      if (responseText.includes('Path:') && !responseText.includes("couldn't find")) {
+        responseText = `Note: The original query did not return results, so I performed a broader search for related files.\n\nReformulated query: "${reformulatedQuery}"\n\n${responseText}`;
+        
+        feedbackData.largeModelResult = true;
+        saveQueryFeedback(feedbackData);
+        
+        return {
+          successful: true,
+          escalated: true,
+          response: responseText,
+          modelUsed: 'large',
+          durationMs: reformDuration,
+        };
+      }
+    } catch (error) {
+      console.error('[Progressive Query] Reformulation attempt failed:', error);
+    }
+    
+    // If we still can't find anything, return a helpful error message with diagnostics
     feedbackData.largeModelResult = false;
     saveQueryFeedback(feedbackData);
     
     return {
       successful: false,
       escalated: true,
-      response: `I couldn't find relevant information in the codebase for your query: "${information_request}"\n\nThis could be due to:\n- The files might exist with different names than expected\n- The code might be in different directories than searched\n- The files might not exist in the codebase\n\nTry one of these approaches:\n- Provide a more specific file path if you know it\n- Use broader search terms\n- Specify a different directory to search in`,
+      response: `I couldn't find relevant information in the codebase for your query: "${information_request}"\n\nDiagnostic Information:\n- Attempted a broader reformulated query but still found no results\n- The query may contain entity names that don't match the actual codebase\n- If you're looking for an interface like "SomeProps", try searching for the component file instead\n- If searching for a specific functionality, try broader terms or focus on directories\n\nSuggested Approaches:\n- Try a more general search term like the base name (e.g., "Trade" instead of "TradeFormData")\n- Check specific directories like "components/", "types/", or "interfaces/"\n- Use a keyword search with common patterns (e.g., "interface *Props" or "type *Data")\n- Provide a partial file path if you have an idea where the code might be located`,
       modelUsed: 'large',
       durationMs: Date.now() - largeModelStartTime
     };
