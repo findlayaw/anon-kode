@@ -619,6 +619,19 @@ export default {
       supports_response_schema: true,
       supports_tool_choice: true,
     },
+    {
+      model: 'qwen/qwq-32b',
+      max_tokens: 131072,
+      max_input_tokens: 131072,
+      max_output_tokens: 131072,
+      input_cost_per_token: 0.0000015,
+      output_cost_per_token: 0.0000015,
+      provider: 'groq',
+      mode: 'chat',
+      supports_function_calling: true,
+      supports_response_schema: true,
+      supports_tool_choice: true,
+    },
   ],
   anthropic: [
     {
@@ -776,6 +789,21 @@ export default {
     },
   ],
   ollama: [],
+  openrouter: [
+    {
+      model: 'qwen/qwq-32b',
+      max_tokens: 131072,
+      max_input_tokens: 131072,
+      max_output_tokens: 131072,
+      input_cost_per_token: 0.0000015,
+      output_cost_per_token: 0.0000015,
+      provider: 'openrouter',
+      mode: 'chat',
+      supports_function_calling: true,
+      supports_tool_choice: true,
+      supports_system_messages: true,
+    },
+  ],
 }
 
 export const providers = {

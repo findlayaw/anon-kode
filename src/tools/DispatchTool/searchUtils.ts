@@ -38,42 +38,123 @@ export interface SearchOptions {
 }
 
 /**
- * Extract search terms from a natural language query
+ * Extract search terms from a natural language query with improved semantic understanding
  * 
  * @param query The natural language query
- * @returns Array of extracted search terms
+ * @returns Array of extracted search terms with additional semantic context
  */
 export function extractSearchTerms(query: string): string[] {
-  // Remove common words and punctuation
-  const cleanedQuery = query.toLowerCase()
+  // Remove common punctuation
+  const cleanedQuery = query
     .replace(/[.,;:!?'"()\[\]{}]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 
-  // Split into words
+  // Split into words, preserving case for later analysis
   const words = cleanedQuery.split(' ')
 
-  // Filter out common words and very short words
+  // Extended stop words list with programming-related common terms that aren't useful search targets
   const stopWords = new Set([
+    // Common English stop words
     'the', 'and', 'or', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
     'about', 'as', 'of', 'that', 'this', 'these', 'those', 'from', 'is', 'are',
     'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 
     'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can',
     'where', 'when', 'how', 'what', 'who', 'which', 'why', 'i', 'me', 'my', 'mine',
     'you', 'your', 'yours', 'we', 'us', 'our', 'ours', 'they', 'them', 'their',
-    'theirs', 'code', 'function', 'class', 'method', 'file'
+    'theirs',
+    
+    // Common programming terms that are too generic to be useful search terms by themselves
+    'code', 'function', 'class', 'method', 'file', 'object', 'variable', 'value',
+    'type', 'interface', 'module', 'import', 'export', 'return', 'void', 'null',
+    'undefined', 'string', 'number', 'boolean', 'array', 'any', 'get', 'set',
+    'callback', 'parameter', 'argument', 'property', 'attribute'
   ])
 
-  // Extract meaningful terms (non-stop words and words with 3+ characters)
-  const searchTerms = words.filter(word => 
-    !stopWords.has(word) && (word.length > 2 || /^[A-Z][a-z]*$/.test(word))
-  )
-
-  return searchTerms
+  // Prepare an array for result terms
+  const searchTerms: string[] = []
+  
+  // Extract terms, handling different cases
+  words.forEach(word => {
+    const lowerWord = word.toLowerCase()
+    
+    // Always include camelCase and PascalCase terms, they're likely important identifiers
+    if (/^[A-Z][a-z0-9]+[A-Z]|^[a-z]+[A-Z]/.test(word)) {
+      searchTerms.push(word) // Keep original case
+      return
+    }
+    
+    // Always include PascalCase terms (likely class/component names)
+    if (/^[A-Z][a-z0-9]+$/.test(word)) {
+      searchTerms.push(word) // Keep original case
+      return
+    }
+    
+    // Always include snake_case or kebab-case identifiers
+    if (/_/.test(word) || /-/.test(word)) {
+      searchTerms.push(word)
+      return
+    }
+    
+    // Skip stop words only if they're not part of a specialized programming term
+    if (!stopWords.has(lowerWord) && (word.length > 2)) {
+      searchTerms.push(lowerWord)
+    }
+  })
+  
+  // Extract multi-word programming concepts that might be important
+  const multiWordPatterns = [
+    // React and UI patterns
+    /react\s+component/i, /functional\s+component/i, /class\s+component/i,
+    /react\s+hook/i, /context\s+provider/i, /render\s+prop/i,
+    /higher\s+order\s+component/i, /event\s+handler/i, /style\s+component/i,
+    
+    // Data management patterns
+    /state\s+management/i, /data\s+flow/i, /form\s+validation/i,
+    /data\s+fetching/i, /async\s+operation/i, /error\s+handling/i,
+    /data\s+transform/i, /data\s+model/i,
+    
+    // Common programming patterns
+    /design\s+pattern/i, /factory\s+pattern/i, /singleton\s+pattern/i,
+    /observer\s+pattern/i, /dependency\s+injection/i, /type\s+checking/i,
+    /code\s+splitting/i, /lazy\s+loading/i
+  ]
+  
+  multiWordPatterns.forEach(pattern => {
+    const match = cleanedQuery.match(pattern)
+    if (match && match[0]) {
+      // Add the multi-word concept, replacing spaces with underscores to keep it together
+      searchTerms.push(match[0].replace(/\s+/g, '_'))
+    }
+  })
+  
+  // Enhance search terms with derived domain concepts
+  // These help establish the search context beyond just the literal terms
+  
+  // UI/component related terms
+  if (searchTerms.some(term => ['component', 'jsx', 'tsx', 'render', 'view', 'ui'].includes(term.toLowerCase()))) {
+    searchTerms.push('component')
+    searchTerms.push('render')
+  }
+  
+  // Data management related terms
+  if (searchTerms.some(term => ['state', 'store', 'data', 'model', 'schema'].includes(term.toLowerCase()))) {
+    searchTerms.push('data')
+    searchTerms.push('state')
+  }
+  
+  // Form handling related terms
+  if (searchTerms.some(term => ['form', 'input', 'validate', 'submit'].includes(term.toLowerCase()))) {
+    searchTerms.push('form')
+    searchTerms.push('input')
+  }
+  
+  // Remove duplicates and normalize
+  return [...new Set(searchTerms)]
 }
 
 /**
- * Extract possible file names from a query
+ * Extract possible file names from a query with enhanced pattern recognition
  * 
  * @param query The search query
  * @returns Array of potential file names
@@ -82,32 +163,97 @@ export function extractPotentialFileNames(query: string): string[] {
   const potentialFileNames: string[] = []
 
   // Match camelCase or PascalCase identifiers
-  const camelOrPascalCase = /\b([A-Z][a-z0-9]+[A-Z]?[a-z0-9]*)+\b/g
+  // Improved regex to catch more variants of camelCase and PascalCase
+  const camelOrPascalCase = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g
   const camelCaseMatches = query.match(camelOrPascalCase) || []
   potentialFileNames.push(...camelCaseMatches)
 
-  // Match filenames with extensions
-  const fileWithExtension = /\b[\w.-]+\.(js|jsx|ts|tsx|css|html|md|json|yml|yaml)\b/g
+  // Match filenames with extensions - expanded to include more file types
+  const fileWithExtension = /\b[\w.-]+\.(js|jsx|ts|tsx|css|scss|less|html|md|json|yml|yaml|xml|svg|py|rb|java|go|php|c|cpp|h|cs)\b/g
   const fileMatches = query.match(fileWithExtension) || []
   potentialFileNames.push(...fileMatches)
 
-  // Match words that are likely component names
-  const componentNames = /\b([A-Z][a-z0-9]+)(View|Component|Page|Form|Modal|Dialog|Card|List|Item|Button|Input|Container)\b/g
+  // Match words that are likely component names - expanded to catch more UI component patterns
+  const componentNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)(View|Component|Page|Form|Modal|Dialog|Card|List|Item|Button|Input|Container|Widget|Panel|Bar|Menu|Nav|Header|Footer|Layout|Row|Column|Grid|Field|Label|Text|Icon|Image|Avatar|Chart|Graph|Table)\b/g
   const componentMatches = query.match(componentNames) || []
   potentialFileNames.push(...componentMatches)
 
-  // Match kebab-case identifiers
-  const kebabCase = /\b([a-z][a-z0-9]*-[a-z0-9-]+)\b/g
+  // Match service, utility, and other common patterns
+  const utilityNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)(Service|Util|Utils|Utility|Helper|Manager|Provider|Client|Factory|Builder|Handler|Controller|Repository|Store|Hook|Context)\b/g
+  const utilityMatches = query.match(utilityNames) || []
+  potentialFileNames.push(...utilityMatches)
+
+  // Match kebab-case identifiers - improved to catch more variants
+  const kebabCase = /\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b/g
   const kebabCaseMatches = query.match(kebabCase) || []
   potentialFileNames.push(...kebabCaseMatches)
 
-  // Match snake_case identifiers
-  const snakeCase = /\b([a-z][a-z0-9]*_[a-z0-9_]+)\b/g
+  // Match snake_case identifiers - improved to catch more variants
+  const snakeCase = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g
   const snakeCaseMatches = query.match(snakeCase) || []
   potentialFileNames.push(...snakeCaseMatches)
 
-  // Filter out duplicates and return
+  // Match words that appear after "find", "in", "the", or similar contextual markers
+  const contextualMatches: string[] = []
+  const contextualPrefixes = ['find', 'in', 'the', 'for', 'about', 'how', 'where', 'implement']
+  
+  contextualPrefixes.forEach(prefix => {
+    const prefixRegex = new RegExp(`\\b${prefix}\\s+([A-Z][a-zA-Z0-9]+|[a-z][a-z0-9]*(?:[A-Z][a-zA-Z0-9]*)+)\\b`, 'g')
+    let match
+    while ((match = prefixRegex.exec(query)) !== null) {
+      if (match[1] && match[1].length > 2) {
+        contextualMatches.push(match[1])
+      }
+    }
+  })
+  potentialFileNames.push(...contextualMatches)
+
+  // Extract interface names (often have 'I' prefix or 'Props' suffix)
+  const interfaceNames = /\b(I[A-Z][a-zA-Z0-9]*|[A-Z][a-zA-Z0-9]*(?:Props|Config|Options|Settings|State|Model|Schema|Type|Interface))\b/g
+  const interfaceMatches = query.match(interfaceNames) || []
+  potentialFileNames.push(...interfaceMatches)
+
+  // Generate additional variations for potential ambiguous cases
+  const additionalVariations: string[] = []
+  potentialFileNames.forEach(name => {
+    // If the name is in PascalCase, add kebab-case version
+    if (/^[A-Z][a-z]+(?:[A-Z][a-z]+)+$/.test(name)) {
+      additionalVariations.push(
+        name.replace(/([A-Z])/g, (match, letter, offset) => 
+          offset > 0 ? '-' + letter.toLowerCase() : letter.toLowerCase())
+      )
+    }
+    
+    // If the name is camelCase, add snake_case version
+    if (/^[a-z]+(?:[A-Z][a-z]+)+$/.test(name)) {
+      additionalVariations.push(
+        name.replace(/([A-Z])/g, (match, letter) => '_' + letter.toLowerCase())
+      )
+    }
+    
+    // If the name contains 'Interface' or 'Props', add both the full version and without suffix
+    if (name.endsWith('Interface') || name.endsWith('Props')) {
+      const baseName = name.replace(/(Interface|Props)$/, '')
+      additionalVariations.push(baseName)
+    }
+    
+    // If the name ends with 'View', 'Component', etc., also try without the suffix
+    if (/(?:View|Component|Page|Form)$/.test(name)) {
+      additionalVariations.push(name.replace(/(?:View|Component|Page|Form)$/, ''))
+    }
+  })
+  
+  potentialFileNames.push(...additionalVariations)
+
+  // Filter out common words that are unlikely to be file names
+  const commonWords = new Set([
+    'find', 'the', 'and', 'for', 'with', 'that', 'this', 'what', 'how', 'where', 'when',
+    'which', 'who', 'why', 'not', 'from', 'code', 'does', 'implement', 'implementation'
+  ])
+  
+  // Filter out duplicates and common words, and return
   return [...new Set(potentialFileNames)]
+    .filter(name => !commonWords.has(name.toLowerCase()) && name.length > 1)
 }
 
 /**
@@ -166,6 +312,19 @@ export function createAdvancedGlobPatterns(
       patterns.push(`${baseDir}/**/components/**/${term}${extensionPattern}`)
       patterns.push(`${baseDir}/**/views/**/${term}${extensionPattern}`)
       patterns.push(`${baseDir}/**/pages/**/${term}${extensionPattern}`)
+      patterns.push(`${baseDir}/**/forms/**/${term}${extensionPattern}`)
+      patterns.push(`${baseDir}/**/fields/**/${term}${extensionPattern}`)
+      
+      // Also look for components with View/Form suffix
+      patterns.push(`${baseDir}/**/${term}View${extensionPattern}`)
+      patterns.push(`${baseDir}/**/${term}Form${extensionPattern}`)
+      patterns.push(`${baseDir}/**/${term}Component${extensionPattern}`)
+    }
+    
+    // For camelCase terms, look for related files
+    if (/^[a-z][a-z0-9]*[A-Z]/.test(term)) {
+      patterns.push(`${baseDir}/**/utils/**/*${term}*${extensionPattern}`)
+      patterns.push(`${baseDir}/**/hooks/**/use${term.charAt(0).toUpperCase() + term.slice(1)}*${extensionPattern}`)
     }
   })
   
@@ -468,8 +627,35 @@ export function formatSearchResults(results: SearchResult[]): string {
             output += `\n\nExports: ${relations.exports.join(', ')}`
           }
           
+          if (relations.importedBy?.length) {
+            output += `\n\nImported By: ${relations.importedBy.join(', ')}`
+          }
+          
+          if (relations.exportsTo?.length) {
+            output += `\n\nExports To: ${relations.exportsTo.join(', ')}`
+          }
+          
           if (relations.relatedComponents?.length) {
             output += `\n\nRelated Components: ${relations.relatedComponents.join(', ')}`
+          }
+        }
+        
+        // Add type definition information if available
+        if (chunk.metadata.typeDefinition) {
+          const typeDef = chunk.metadata.typeDefinition
+          
+          if (typeDef.properties?.length) {
+            output += `\n\nProperties:\n`
+            typeDef.properties.forEach(prop => {
+              output += `- ${prop.name}: ${prop.type}\n`
+            })
+          }
+          
+          if (typeDef.methods?.length) {
+            output += `\n\nMethods:\n`
+            typeDef.methods.forEach(method => {
+              output += `- ${method.name}(${method.parameters.join(', ')})\n`
+            })
           }
         }
         
@@ -487,6 +673,56 @@ export function formatSearchResults(results: SearchResult[]): string {
       output += "----------------------------------------\n\n"
     }
   })
+  
+  // Add a summary section with relationship information
+  if (results.length > 1) {
+    output += "\n\n## Relationships Between Found Files\n\n"
+    
+    // Collect file relationship data
+    const fileLinks: string[] = []
+    
+    results.forEach(result => {
+      const displayPath = result.formattedDisplayPath || result.filePath
+      const fileName = path.basename(displayPath)
+      
+      // Check for imports between found files
+      const imports = result.chunks
+        ?.filter(chunk => chunk.type === 'imports')
+        ?.flatMap(chunk => chunk.metadata.relationshipContext?.imports || []) || []
+      
+      const foundFileImports = imports.filter(imp => 
+        results.some(r => {
+          const otherFileName = path.basename(r.filePath)
+          return imp.includes(otherFileName.replace(/\.[^.]+$/, ''))
+        })
+      )
+      
+      if (foundFileImports.length > 0) {
+        fileLinks.push(`${fileName} imports: ${foundFileImports.join(', ')}`)
+      }
+      
+      // Check for relationships through components
+      const relatedComponents = result.chunks
+        ?.flatMap(chunk => chunk.metadata.relationshipContext?.relatedComponents || []) || []
+      
+      const foundFileRelatedComponents = relatedComponents.filter(comp => 
+        results.some(r => {
+          const otherFileName = path.basename(r.filePath)
+          return otherFileName.startsWith(comp) || comp.includes(otherFileName.replace(/\.[^.]+$/, ''))
+        })
+      )
+      
+      if (foundFileRelatedComponents.length > 0) {
+        fileLinks.push(`${fileName} references: ${foundFileRelatedComponents.join(', ')}`)
+      }
+    })
+    
+    if (fileLinks.length > 0) {
+      output += fileLinks.join('\n') + '\n\n'
+    } else {
+      output += "No direct relationships detected between the found files.\n\n"
+    }
+  }
   
   return output
 }

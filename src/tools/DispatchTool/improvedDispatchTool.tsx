@@ -118,8 +118,27 @@ export const ImprovedDispatchTool = {
     const searchTerms = extractSearchTerms(information_request)
     const potentialFileNames = extractPotentialFileNames(information_request)
 
+    // Look for specific component or style-related terms
+    const hasUIRelatedTerms = information_request.toLowerCase().includes('style') || 
+                             information_request.toLowerCase().includes('component') ||
+                             information_request.toLowerCase().includes('render') ||
+                             information_request.toLowerCase().includes('dom')
+                             
+    // Look for data structure terms
+    const hasDataStructureTerms = information_request.toLowerCase().includes('interface') || 
+                                 information_request.toLowerCase().includes('type') ||
+                                 information_request.toLowerCase().includes('props')
+                                 
+    // Look for relationship terms
+    const hasRelationshipTerms = information_request.toLowerCase().includes('import') || 
+                               information_request.toLowerCase().includes('use') ||
+                               information_request.toLowerCase().includes('extends')
+
     console.log('Search terms:', searchTerms)
     console.log('Potential file names:', potentialFileNames)
+    console.log('Query contains UI terms:', hasUIRelatedTerms)
+    console.log('Query contains data structure terms:', hasDataStructureTerms)
+    console.log('Query contains relationship terms:', hasRelationshipTerms)
 
     // Create advanced glob patterns for file matching
     const globPatterns = createAdvancedGlobPatterns(
@@ -236,6 +255,19 @@ export const ImprovedDispatchTool = {
     // perform an expanded direct search to complement or replace LLM results
     if (hasNoResults || filePaths.length < 2) {
       console.log('LLM did not find sufficient results, performing direct search...')
+      
+      // Adjust search strategy based on query type
+      if (hasUIRelatedTerms) {
+        console.log('Query contains UI-related terms, prioritizing component search...')
+      }
+      
+      if (hasDataStructureTerms) {
+        console.log('Query contains data structure terms, prioritizing interface and type search...')
+      }
+      
+      if (hasRelationshipTerms) {
+        console.log('Query contains relationship terms, prioritizing cross-file dependency search...')
+      }
 
       try {
         // Get current working directory

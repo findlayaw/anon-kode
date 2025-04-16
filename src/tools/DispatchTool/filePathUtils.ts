@@ -280,16 +280,22 @@ export function isLikelyUIComponent(filePath: string, fileContent?: string): boo
   const extension = path.extname(filePath).toLowerCase()
   
   // Check by extension first
-  const isUIExtension = extension === '.jsx' || extension === '.tsx'
+  const isUIExtension = extension === '.jsx' || extension === '.tsx' || 
+                       (extension === '.js' || extension === '.ts') // Some projects use .js/.ts for components too
   
   // Check by filename convention (PascalCase for components)
   const isPascalCase = /^[A-Z][a-zA-Z0-9]*\.(j|t)sx?$/.test(fileName)
+  
+  // Check for common component naming patterns
+  const hasComponentName = /Component|Form|View|Page|Modal|Card|Field|Button|Input/i.test(fileName)
   
   // Check by directory name
   const directory = path.dirname(filePath)
   const isInComponentsDir = directory.includes('components') || 
                            directory.includes('pages') || 
-                           directory.includes('views')
+                           directory.includes('views') ||
+                           directory.includes('forms') ||
+                           directory.includes('fields')
   
   // If we have file content, do deeper analysis
   if (fileContent) {
@@ -305,11 +311,22 @@ export function isLikelyUIComponent(filePath: string, fileContent?: string): boo
     // Check for component patterns
     const hasComponentPattern = fileContent.includes('function ') && hasJSX ||
                                fileContent.includes('const ') && fileContent.includes(' = (') && hasJSX ||
-                               fileContent.includes('class ') && fileContent.includes(' extends ')
+                               fileContent.includes('class ') && fileContent.includes(' extends ') ||
+                               fileContent.includes('export default') && (fileContent.includes('function') || fileContent.includes('class'))
     
-    return (hasReactImport && hasJSX) || hasComponentPattern
+    // Check for hooks - strong indicator for React components
+    const hasHooks = fileContent.includes('useState') || 
+                     fileContent.includes('useEffect') || 
+                     fileContent.includes('useRef') ||
+                     fileContent.includes('useContext') ||
+                     fileContent.includes('use')
+    
+    return (hasReactImport && hasJSX) || hasComponentPattern || (hasHooks && hasJSX)
   }
   
   // Without content, use heuristics
-  return (isUIExtension && isPascalCase) || (isPascalCase && isInComponentsDir)
+  return (isUIExtension && isPascalCase) || 
+         (isPascalCase && isInComponentsDir) || 
+         hasComponentName ||
+         (isInComponentsDir && fileName.startsWith('use')) // React custom hooks
 }
