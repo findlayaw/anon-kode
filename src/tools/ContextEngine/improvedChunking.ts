@@ -180,7 +180,76 @@ export function groupChunksByRelationship(chunks: EnhancedCodeChunk[]): Record<s
 }
 
 /**
- * Connect chunks by their relationships
+ * Build an import/export index for improving cross-file relationship tracking
+ * This creates a detailed map of imports and exports to better track dependencies
+ * 
+ * @param chunks Array of code chunks
+ * @returns Map of imports and exports
+ */
+export function buildImportExportIndex(chunks: EnhancedCodeChunk[]): {
+  importMap: Map<string, string[]>, // Maps entities to files that import them
+  exportMap: Map<string, string[]>, // Maps entities to files that export them
+  importFileMap: Map<string, string[]>, // Maps files to files they import from
+  exportFileMap: Map<string, string[]>  // Maps files to files they export to
+} {
+  const importMap = new Map<string, string[]>();
+  const exportMap = new Map<string, string[]>();
+  const importFileMap = new Map<string, string[]>();
+  const exportFileMap = new Map<string, string[]>();
+  
+  // First pass: index all exports
+  chunks.forEach(chunk => {
+    if (chunk.metadata.isExported) {
+      // Add to export map
+      if (!exportMap.has(chunk.name)) {
+        exportMap.set(chunk.name, []);
+      }
+      exportMap.get(chunk.name)!.push(chunk.filePath);
+    }
+  });
+  
+  // Second pass: process imports and connect them to exports
+  chunks.forEach(chunk => {
+    if (chunk.type === 'imports' && chunk.metadata.relationshipContext?.imports) {
+      const imports = chunk.metadata.relationshipContext.imports;
+      
+      // Track file-level imports
+      if (!importFileMap.has(chunk.filePath)) {
+        importFileMap.set(chunk.filePath, []);
+      }
+      
+      imports.forEach(importSource => {
+        // Try to resolve relative imports
+        let resolvedPath = importSource;
+        
+        if (importSource.startsWith('.')) {
+          // Resolve relative path
+          const dirName = path.dirname(chunk.filePath);
+          resolvedPath = path.resolve(dirName, importSource);
+        }
+        
+        // Check if this is a file path or a module name
+        if (resolvedPath.includes('/')) {
+          // It's likely a file path
+          importFileMap.get(chunk.filePath)!.push(resolvedPath);
+          
+          // Also record the export relationship
+          if (!exportFileMap.has(resolvedPath)) {
+            exportFileMap.set(resolvedPath, []);
+          }
+          if (!exportFileMap.get(resolvedPath)!.includes(chunk.filePath)) {
+            exportFileMap.get(resolvedPath)!.push(chunk.filePath);
+          }
+        }
+      });
+    }
+  });
+  
+  return { importMap, exportMap, importFileMap, exportFileMap };
+}
+
+/**
+ * Connect chunks by their relationships with enhanced cross-file tracking
  * 
  * @param chunks Array of code chunks
  * @param fileRelationships Map of file paths to their relationships

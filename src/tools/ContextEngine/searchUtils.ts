@@ -21,8 +21,11 @@ export interface SearchResult {
   content: string
   chunks: EnhancedCodeChunk[]
   relevanceScore: number
+  confidenceScore?: number // Added confidence score to indicate result quality
   matchContext?: string
   formattedDisplayPath?: string
+  isExactMatch?: boolean // Flag for exact matches vs inferred/synthetic results
+  matchType?: 'exact' | 'inferred' | 'partial' | 'synthetic' // Type of match found
 }
 
 /**
@@ -706,15 +709,18 @@ export function rankSearchResults(
 }
 
 /**
- * Ensure we have complete and readable results
+ * Ensure we have complete and readable results with confidence scoring
  * 
  * @param results Raw search results
+ * @param searchTerms Search terms extracted from query
+ * @param potentialFileNames Potential file names extracted from query
  * @param maxResults Maximum number of results to return
- * @returns Enhanced and filtered search results
+ * @returns Enhanced and filtered search results with confidence scores
  */
 export function enhanceSearchResults(
   results: SearchResult[],
   searchTerms: string[],
+  potentialFileNames: string[] = [],
   maxResults: number = 10
 ): SearchResult[] {
   if (results.length === 0) {
@@ -732,9 +738,84 @@ export function enhanceSearchResults(
         maxResults
       )
       
+      // Calculate a confidence score for this result
+      let confidenceScore = 0;
+      
+      // File name match confidence
+      const fileName = path.basename(result.filePath);
+      const fileNameLower = fileName.toLowerCase();
+      
+      // Strong confidence for exact file name matches
+      const exactFileNameMatch = potentialFileNames.some(name => 
+        fileName === name || 
+        fileName === `${name}.jsx` || 
+        fileName === `${name}.tsx` || 
+        fileName === `${name}.js` || 
+        fileName === `${name}.ts`
+      );
+      
+      if (exactFileNameMatch) {
+        confidenceScore += 0.4; // 40% confidence from filename match
+      } else if (potentialFileNames.some(name => fileNameLower.includes(name.toLowerCase()))) {
+        confidenceScore += 0.2; // 20% confidence from partial filename match
+      }
+      
+      // Content match confidence
+      const contentMatchPoints = Math.min(1, searchTerms.filter(term => 
+        result.content.toLowerCase().includes(term.toLowerCase())).length / searchTerms.length);
+      
+      confidenceScore += contentMatchPoints * 0.3; // Up to 30% from content matches
+      
+      // Chunk quality confidence
+      // - Look for exact entity name matches
+      // - Check for interface/class/component definitions
+      // - Validate interface properties contain expected fields
+      
+      const definitionChunks = relevantChunks.filter(chunk => 
+        chunk.type === 'interface' || 
+        chunk.type === 'type' || 
+        chunk.type === 'class' || 
+        chunk.type === 'react-component'
+      );
+      
+      if (definitionChunks.length > 0) {
+        confidenceScore += 0.15; // 15% confidence for having definition chunks
+        
+        // Additional points for chunks with matching names
+        const nameMatchingChunks = definitionChunks.filter(chunk => 
+          potentialFileNames.some(name => 
+            chunk.name === name || 
+            chunk.name.includes(name)
+          )
+        );
+        
+        if (nameMatchingChunks.length > 0) {
+          confidenceScore += 0.15; // 15% more for name matching definitions
+        }
+      }
+      
+      // Determine match type
+      let matchType: 'exact' | 'inferred' | 'partial' | 'synthetic' = 'partial';
+      
+      if (confidenceScore >= 0.8) {
+        matchType = 'exact'; // High confidence = exact match
+      } else if (confidenceScore >= 0.5) {
+        matchType = 'partial'; // Medium confidence = partial match
+      } else if (confidenceScore >= 0.3) {
+        matchType = 'inferred'; // Low confidence = inferred match
+      } else {
+        matchType = 'synthetic'; // Very low confidence = synthetic match
+      }
+      
+      // Round confidence score to 2 decimal places
+      confidenceScore = Math.round(confidenceScore * 100) / 100;
+      
       return {
         ...result,
-        chunks: relevantChunks
+        chunks: relevantChunks,
+        confidenceScore,
+        isExactMatch: matchType === 'exact',
+        matchType
       }
     }
     
@@ -746,8 +827,14 @@ export function enhanceSearchResults(
     (result.chunks && result.chunks.length > 0) || result.content
   )
   
-  // Prioritize results with more matching search terms
+  // Prioritize results with higher confidence scores
   filteredResults.sort((a, b) => {
+    // First by confidence score if available
+    if (a.confidenceScore !== undefined && b.confidenceScore !== undefined) {
+      return b.confidenceScore - a.confidenceScore;
+    }
+    
+    // Fall back to term matching if confidence scores aren't available
     const aMatches = searchTerms.filter(term => 
       a.content.toLowerCase().includes(term.toLowerCase())).length
     const bMatches = searchTerms.filter(term => 

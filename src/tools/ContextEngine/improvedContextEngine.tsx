@@ -22,7 +22,12 @@ import fs from 'fs'
 import { isRunningInWSL } from '../../utils/file'
 
 // Import our improved utilities
-import { chunkCodeWithContext, connectChunkRelationships, groupChunksByRelationship } from './improvedChunking'
+import { 
+  chunkCodeWithContext, 
+  connectChunkRelationships, 
+  groupChunksByRelationship,
+  buildImportExportIndex 
+} from './improvedChunking'
 import { findPathWithCorrectCase, findSimilarPaths, normalizePath, formatPathForDisplay, isLikelyUIComponent } from './filePathUtils'
 import { 
   extractSearchTerms, 
@@ -31,9 +36,10 @@ import {
   createContentSearchPatterns, 
   SearchResult,
   rankSearchResults,
-  enhanceSearchResults,
-  formatSearchResults
+  enhanceSearchResults
 } from './searchUtils'
+// Use the enhanced search results formatter
+import { formatEnhancedSearchResults } from './formatSearchResults'
 
 const inputSchema = z.strictObject({
   information_request: z
@@ -419,7 +425,7 @@ export const ImprovedContextEngine = {
       }
     }
 
-    // Create a map of file relationships
+    // Create a map of file relationships with improved cross-file tracking
     const fileRelationships = new Map<string, { 
       importedBy: string[], 
       exportsTo: string[], 
@@ -430,7 +436,7 @@ export const ImprovedContextEngine = {
     
     // Calculate file relationships if we have include_dependencies
     if (include_dependencies && searchResults.length > 0) {
-      console.log('Calculating file relationships...')
+      console.log('Calculating file relationships with enhanced cross-file tracking...')
       
       // First, create a map of all exports and entity types
       const exportMap = new Map<string, string>()
@@ -439,7 +445,11 @@ export const ImprovedContextEngine = {
       const typeMap = new Map<string, string>()
       const propsInterfaceMap = new Map<string, string>() // Special map for Props interfaces
       
-      // First pass - collect all entity information
+      // Enhanced component-props relationship tracking
+      const componentPropsMap = new Map<string, string[]>() // Maps component names to props interfaces
+      const propsComponentMap = new Map<string, string[]>() // Maps props interfaces to components
+      
+      // First pass - collect all entity information with improved relationship tracking
       searchResults.forEach(result => {
         // Initialize the relationship object
         fileRelationships.set(result.filePath, { 
@@ -463,21 +473,65 @@ export const ImprovedContextEngine = {
              (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) {
             components.push(chunk.name);
             componentMap.set(chunk.name, result.filePath);
+            
+            // Add to component-props tracking
+            if (!componentPropsMap.has(chunk.name)) {
+              componentPropsMap.set(chunk.name, []);
+            }
+            
+            // Check for "use" statements that might indicate hook/context usage
+            const useStatements = (chunk.content.match(/use[A-Z][a-zA-Z]+\(/g) || [])
+              .map(match => match.slice(0, -1)); // Remove trailing (
+            
+            if (useStatements.length > 0) {
+              // Track potential hook dependencies
+              if (!chunk.metadata.relationshipContext) {
+                chunk.metadata.relationshipContext = {};
+              }
+              if (!chunk.metadata.relationshipContext.relatedComponents) {
+                chunk.metadata.relationshipContext.relatedComponents = [];
+              }
+              useStatements.forEach(hook => {
+                if (!chunk.metadata.relationshipContext!.relatedComponents!.includes(hook)) {
+                  chunk.metadata.relationshipContext!.relatedComponents!.push(hook);
+                }
+              });
+            }
           }
           
-          // Track interfaces
+          // Track interfaces with enhanced pattern matching
           if (chunk.type === 'interface') {
             interfaces.push(chunk.name);
             interfaceMap.set(chunk.name, result.filePath);
             
-            // Special tracking for Props interfaces
-            if (chunk.name.endsWith('Props') || chunk.name.includes('Props')) {
+            // Special tracking for Props interfaces with improved patterns
+            const propsPatterns = [
+              { pattern: /Props$/, nameTransform: (name: string) => name.replace(/Props$/, '') },
+              { pattern: /FieldsProps$/, nameTransform: (name: string) => name.replace(/FieldsProps$/, 'Fields') },
+              { pattern: /FormProps$/, nameTransform: (name: string) => name.replace(/FormProps$/, 'Form') }
+            ];
+            
+            // Check if this interface matches any props pattern
+            const matchingPattern = propsPatterns.find(p => p.pattern.test(chunk.name));
+            
+            if (matchingPattern) {
+              // This is a props interface
               propsInterfaceMap.set(chunk.name, result.filePath);
               
+              // Track in the props-component map
+              if (!propsComponentMap.has(chunk.name)) {
+                propsComponentMap.set(chunk.name, []);
+              }
+              
               // Try to identify the component this props interface belongs to
-              const possibleComponentName = chunk.name.replace(/Props$/, '');
+              const possibleComponentName = matchingPattern.nameTransform(chunk.name);
+              
               if (componentMap.has(possibleComponentName)) {
-                // Record the component-props relationship
+                // Found a matching component - record the relationship
+                propsComponentMap.get(chunk.name)!.push(possibleComponentName);
+                componentPropsMap.get(possibleComponentName)!.push(chunk.name);
+                
+                // Also record in the file relationship
                 const componentFilePath = componentMap.get(possibleComponentName)!;
                 const componentFileRel = fileRelationships.get(componentFilePath);
                 if (componentFileRel) {
@@ -489,10 +543,38 @@ export const ImprovedContextEngine = {
             }
           }
           
-          // Track types
+          // Track types with enhanced pattern matching for data models
           if (chunk.type === 'type') {
             types.push(chunk.name);
             typeMap.set(chunk.name, result.filePath);
+            
+            // Special handling for data types (FormData, etc.)
+            const dataPatterns = [
+              { pattern: /Data$/, nameTransform: (name: string) => name.replace(/Data$/, '') },
+              { pattern: /FormData$/, nameTransform: (name: string) => name.replace(/FormData$/, 'Form') },
+              { pattern: /Model$/, nameTransform: (name: string) => name.replace(/Model$/, '') }
+            ];
+            
+            // Check if this type matches any data pattern
+            const matchingDataPattern = dataPatterns.find(p => p.pattern.test(chunk.name));
+            
+            if (matchingDataPattern) {
+              // This is a data type - try to find related components
+              const possibleComponentName = matchingDataPattern.nameTransform(chunk.name);
+              
+              if (componentMap.has(possibleComponentName)) {
+                // Found a matching component - record the relationship
+                if (!chunk.metadata.relationshipContext) {
+                  chunk.metadata.relationshipContext = {};
+                }
+                if (!chunk.metadata.relationshipContext.relatedComponents) {
+                  chunk.metadata.relationshipContext.relatedComponents = [];
+                }
+                if (!chunk.metadata.relationshipContext.relatedComponents.includes(possibleComponentName)) {
+                  chunk.metadata.relationshipContext.relatedComponents.push(possibleComponentName);
+                }
+              }
+            }
           }
         });
         
@@ -503,11 +585,27 @@ export const ImprovedContextEngine = {
         relationship.types = types;
       });
       
-      // Second pass - resolve import/export relationships between files
+      // Second pass - resolve import/export relationships between files with improved tracking
+      // Build the import/export index for all files
+      const allChunks = searchResults.flatMap(result => result.chunks);
+      const { importMap, exportMap, importFileMap, exportFileMap } = buildImportExportIndex(allChunks);
+      
+      // Use the index to update file relationships
       searchResults.forEach(result => {
         const importedBy: string[] = [];
         const exportsTo: string[] = [];
         
+        // Add files that import from this file
+        if (exportFileMap.has(result.filePath)) {
+          importedBy.push(...exportFileMap.get(result.filePath)!);
+        }
+        
+        // Add files this file imports from
+        if (importFileMap.has(result.filePath)) {
+          exportsTo.push(...importFileMap.get(result.filePath)!);
+        }
+        
+        // Enhanced analysis for direct import/export relationships
         // Get all imports from this file's chunks
         const imports = result.chunks
           .filter(chunk => chunk.type === 'imports')
@@ -538,42 +636,38 @@ export const ImprovedContextEngine = {
               possiblePaths.includes(r.filePath)
             );
             
-            if (matchingResult) {
+            if (matchingResult && !exportsTo.includes(matchingResult.filePath)) {
               exportsTo.push(matchingResult.filePath);
             }
           }
         });
         
-        // For each exported chunk, check if it's imported by other files
-        const exportedChunks = result.chunks.filter(chunk => chunk.metadata.isExported);
+        // For named exports, check for more granular import relationships
+        const exportedEntities = result.chunks
+          .filter(chunk => chunk.metadata.isExported)
+          .map(chunk => chunk.name);
         
-        if (exportedChunks.length > 0) {
-          // Check if other files import from this file
+        if (exportedEntities.length > 0) {
+          // For each exported entity, check if other files import it
           searchResults.forEach(otherResult => {
-            if (otherResult.filePath === result.filePath) return;
+            if (otherResult.filePath === result.filePath) return; // Skip self
             
+            // Get imports for the other file
             const otherImports = otherResult.chunks
               .filter(chunk => chunk.type === 'imports')
-              .flatMap(chunk => chunk.metadata.relationshipContext?.imports || []);
+              .flatMap(chunk => chunk.content);
             
-            // Check if any imports in otherResult reference this file
-            if (otherImports.some(imp => {
-              // For relative imports, resolve the path
-              if (imp.startsWith('.')) {
-                const resolvedPath = path.resolve(path.dirname(otherResult.filePath), imp);
-                
-                // Check various file patterns
-                return (
-                  resolvedPath === result.filePath || 
-                  resolvedPath === result.filePath.replace(/\.[^.]+$/, '') || // Without extension 
-                  `${resolvedPath}.js` === result.filePath || 
-                  `${resolvedPath}.jsx` === result.filePath || 
-                  `${resolvedPath}.ts` === result.filePath || 
-                  `${resolvedPath}.tsx` === result.filePath
-                );
-              }
-              return false;
-            })) {
+            // Check if any imports mention our exported entities by name
+            const importsOurEntities = exportedEntities.some(entity => 
+              otherImports.some(imp => 
+                imp.includes(`import ${entity}`) || 
+                imp.includes(`import { ${entity}`) || 
+                imp.includes(`, ${entity}`) || 
+                imp.includes(`${entity} }`)
+              )
+            );
+            
+            if (importsOurEntities && !importedBy.includes(otherResult.filePath)) {
               importedBy.push(otherResult.filePath);
             }
           });
@@ -581,8 +675,8 @@ export const ImprovedContextEngine = {
         
         // Add to relationships map
         const relationship = fileRelationships.get(result.filePath)!;
-        relationship.importedBy = importedBy;
-        relationship.exportsTo = exportsTo;
+        relationship.importedBy = [...new Set(importedBy)]; // Deduplicate
+        relationship.exportsTo = [...new Set(exportsTo)]; // Deduplicate
       });
       
       // Third pass - identify component-props relationships that might have been missed
@@ -713,8 +807,8 @@ export const ImprovedContextEngine = {
     // Rank results by relevance to the search terms
     searchResults = rankSearchResults(searchResults, searchTerms, potentialFileNames)
     
-    // Enhance and filter results to ensure completeness
-    searchResults = enhanceSearchResults(searchResults, searchTerms, max_results)
+    // Enhance and filter results to ensure completeness with confidence scoring
+    searchResults = enhanceSearchResults(searchResults, searchTerms, potentialFileNames, max_results)
     
     // Check if we have any results
     if (searchResults.length === 0) {
@@ -756,8 +850,8 @@ export const ImprovedContextEngine = {
       return
     }
     
-    // Format the results for display
-    const formattedResponse = formatSearchResults(searchResults)
+    // Format the results for display with enhanced confidence indicators
+    const formattedResponse = formatEnhancedSearchResults(searchResults)
     
     // Add filters to the response
     let finalResponse = formattedResponse
