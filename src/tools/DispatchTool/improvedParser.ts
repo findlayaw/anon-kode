@@ -420,8 +420,51 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
             }
           })
         }
+
+        // Extract interface properties and their types
+        const interfaceProperties: Array<{name: string, type: string}> = []
+        if (node.body && node.body.body) {
+          node.body.body.forEach(member => {
+            if (t.isTSPropertySignature(member) && member.key) {
+              let propName = '';
+              
+              // Handle different key types
+              if (t.isIdentifier(member.key)) {
+                propName = member.key.name;
+              } else if (t.isStringLiteral(member.key)) {
+                propName = member.key.value;
+              }
+              
+              // Skip if we couldn't get a name
+              if (!propName) return;
+              
+              // Get the type as string
+              let typeStr = 'any';
+              if (member.typeAnnotation && member.typeAnnotation.typeAnnotation) {
+                // Extract the line content for the type
+                const typeLine = lines[member.typeAnnotation.loc.start.line - 1];
+                const typeStart = member.typeAnnotation.loc.start.column;
+                const typeEnd = member.typeAnnotation.loc.end.column;
+                
+                try {
+                  // Try to extract the type string from the line
+                  typeStr = typeLine.substring(typeStart, typeEnd).replace(/^:\s*/, '');
+                } catch (e) {
+                  // Fallback for any parsing issues
+                  typeStr = 'unknown';
+                }
+              }
+              
+              // Add the property
+              interfaceProperties.push({
+                name: propName,
+                type: typeStr
+              });
+            }
+          });
+        }
         
-        // Add interface entity
+        // Add interface entity with enhanced metadata
         entities.push({
           type: 'interface',
           name: interfaceName,
@@ -430,7 +473,15 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
           content: interfaceContent,
           dependencies: extendedInterfaces,
           documentation: getDocumentation(path),
-          isExported
+          isExported,
+          childEntities: interfaceProperties.map(prop => ({
+            type: 'property',
+            name: prop.name,
+            startLine: 0, // We don't track individual property lines
+            endLine: 0,
+            content: `${prop.name}: ${prop.type}`,
+            parentName: interfaceName
+          }))
         })
       },
 
@@ -447,16 +498,95 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
         // Extract type content
         const typeContent = lines.slice(startLine - 1, endLine).join('\n')
         
-        // Add type entity
+        // Extract dependent types from the type annotation
+        const dependencies: string[] = []
+        
+        // Analyze the type to find relationships
+        const extractTypeDependencies = (typeNode: any) => {
+          if (!typeNode) return;
+          
+          // References to other types via identifiers
+          if (t.isTSTypeReference(typeNode) && t.isIdentifier(typeNode.typeName)) {
+            dependencies.push(typeNode.typeName.name);
+          }
+          
+          // Union types
+          if (t.isTSUnionType(typeNode) && typeNode.types) {
+            typeNode.types.forEach((unionType: any) => extractTypeDependencies(unionType));
+          }
+          
+          // Intersection types
+          if (t.isTSIntersectionType(typeNode) && typeNode.types) {
+            typeNode.types.forEach((intersectionType: any) => extractTypeDependencies(intersectionType));
+          }
+          
+          // Array types
+          if (t.isTSArrayType(typeNode) && typeNode.elementType) {
+            extractTypeDependencies(typeNode.elementType);
+          }
+          
+          // Tuple types
+          if (t.isTSTupleType(typeNode) && typeNode.elementTypes) {
+            typeNode.elementTypes.forEach((elementType: any) => extractTypeDependencies(elementType));
+          }
+        };
+        
+        // Extract dependencies from the type definition
+        if (node.typeAnnotation) {
+          extractTypeDependencies(node.typeAnnotation);
+        }
+        
+        // For object types, extract property structure
+        const typeProperties: Array<{name: string, type: string}> = []
+        
+        // Try to extract properties from object type definitions
+        if (t.isTSTypeLiteral(node.typeAnnotation)) {
+          node.typeAnnotation.members.forEach((member: any) => {
+            if (t.isTSPropertySignature(member) && member.key) {
+              let propName = '';
+              
+              // Handle different key types
+              if (t.isIdentifier(member.key)) {
+                propName = member.key.name;
+              } else if (t.isStringLiteral(member.key)) {
+                propName = member.key.value;
+              }
+              
+              if (propName && member.typeAnnotation) {
+                // Get the line for this property
+                const typeLine = lines[member.loc.start.line - 1];
+                const typeStr = typeLine.substring(
+                  member.typeAnnotation.loc.start.column,
+                  member.typeAnnotation.loc.end.column
+                ).replace(/^:\s*/, '');
+                
+                typeProperties.push({
+                  name: propName,
+                  type: typeStr
+                });
+              }
+            }
+          });
+        }
+        
+        // Add type entity with enhanced dependency information
         entities.push({
           type: 'type',
           name: typeName,
           startLine,
           endLine,
           content: typeContent,
-          dependencies: [],
+          dependencies: [...new Set(dependencies)], // Deduplicate
           documentation: getDocumentation(path),
-          isExported
+          isExported,
+          childEntities: typeProperties.length > 0 ? typeProperties.map(prop => ({
+            type: 'property',
+            name: prop.name,
+            startLine: 0,
+            endLine: 0,
+            content: `${prop.name}: ${prop.type}`,
+            parentName: typeName
+          })) : undefined
         })
       }
     })

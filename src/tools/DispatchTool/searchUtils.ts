@@ -208,8 +208,39 @@ export function extractPotentialFileNames(query: string): string[] {
   })
   potentialFileNames.push(...contextualMatches)
 
-  // Extract interface names (often have 'I' prefix or 'Props' suffix)
-  const interfaceNames = /\b(I[A-Z][a-zA-Z0-9]*|[A-Z][a-zA-Z0-9]*(?:Props|Config|Options|Settings|State|Model|Schema|Type|Interface))\b/g
+  // Enhanced interface name extraction with careful attention to 'Props' patterns
+  // This addresses the failed test cases for interfaces like TradeFormData and AssetFieldsProps
+  
+  // 1. Special handling for interfaces with the 'Props' suffix
+  const propsInterfaceNames = /\b([A-Z][a-zA-Z0-9]*Props)\b/g
+  const propsMatches = query.match(propsInterfaceNames) || []
+  potentialFileNames.push(...propsMatches)
+  
+  // 2. Look for compound names that might be interface names
+  const compoundInterfaceNames = /\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+(?:Data|Props|Config|Options|Settings|State|Model|Schema|Type|Interface)?)\b/g
+  const compoundMatches = query.match(compoundInterfaceNames) || []
+  potentialFileNames.push(...compoundMatches)
+  
+  // 3. Extract possible field/property names that might be part of interfaces
+  // e.g., "asset" in "AssetFieldsProps" or "trade" in "TradeFormData"
+  const fieldNameMatches: string[] = []
+  compoundMatches.forEach(match => {
+    // Split PascalCase into individual parts
+    const parts = match.split(/(?=[A-Z])/).filter(p => p.length > 1);
+    if (parts.length > 1) {
+      // Add each individual component as a potential search term
+      fieldNameMatches.push(...parts);
+      
+      // Also add combinations of the parts
+      for (let i = 0; i < parts.length - 1; i++) {
+        fieldNameMatches.push(parts[i] + parts[i+1]);
+      }
+    }
+  });
+  potentialFileNames.push(...fieldNameMatches);
+  
+  // 4. General interface pattern (broader than before)
+  const interfaceNames = /\b(I[A-Z][a-zA-Z0-9]*|[A-Z][a-zA-Z0-9]*(?:Props|Config|Options|Settings|State|Model|Schema|Type|Interface|Form|Fields|Data))\b/g
   const interfaceMatches = query.match(interfaceNames) || []
   potentialFileNames.push(...interfaceMatches)
 
@@ -390,6 +421,24 @@ export function createContentSearchPatterns(
         patterns.push(`class\\s+${nameWithoutExt}\\s+extends`)
         // Export patterns
         patterns.push(`export\\s+(?:default\\s+)?(?:function|class|const)\\s+${nameWithoutExt}`)
+        
+        // Interface patterns - specifically targeting interfaces with this name
+        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
+        patterns.push(`interface\\s+${nameWithoutExt}Props\\b`)
+        patterns.push(`type\\s+${nameWithoutExt}\\b`)
+        
+        // Props patterns - look for components using props with this name
+        patterns.push(`${nameWithoutExt}\\s*:\\s*${nameWithoutExt}Props`)
+        patterns.push(`${nameWithoutExt}\\s*:\\s*React\\..*Props`)
+        
+        // Specific pattern for Fields components and their props
+        if (nameWithoutExt.includes('Fields')) {
+          patterns.push(`interface\\s+${nameWithoutExt.replace('Fields', '')}FieldsProps\\b`)
+          patterns.push(`type\\s+${nameWithoutExt.replace('Fields', '')}FieldsProps\\b`)
+        }
+        
+        // Interface extension patterns
+        patterns.push(`extends\\s+${nameWithoutExt}\\b`)
       }
       
       // For camelCase names, look for functions and variables
@@ -398,6 +447,25 @@ export function createContentSearchPatterns(
         patterns.push(`const\\s+${nameWithoutExt}\\s*=`)
         patterns.push(`let\\s+${nameWithoutExt}\\s*=`)
         patterns.push(`var\\s+${nameWithoutExt}\\s*=`)
+      }
+      
+      // Special pattern for interface names with 'Props' suffix
+      if (nameWithoutExt.endsWith('Props')) {
+        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
+        patterns.push(`type\\s+${nameWithoutExt}\\b`)
+        
+        // Also look for the component that might use this props interface
+        const componentName = nameWithoutExt.replace(/Props$/, '')
+        patterns.push(`function\\s+${componentName}\\b`)
+        patterns.push(`const\\s+${componentName}\\s*=`)
+        patterns.push(`class\\s+${componentName}\\b`)
+      }
+      
+      // Special pattern for interface names with 'Data' suffix
+      if (nameWithoutExt.endsWith('Data') || nameWithoutExt.includes('Form')) {
+        patterns.push(`interface\\s+${nameWithoutExt}\\b`)
+        patterns.push(`type\\s+${nameWithoutExt}\\b`)
+        patterns.push(`export\\s+(?:interface|type)\\s+${nameWithoutExt}\\b`)
       }
     })
     
@@ -612,13 +680,71 @@ export function formatSearchResults(results: SearchResult[]): string {
     // If we have chunks, display them
     if (result.chunks && result.chunks.length > 0) {
       result.chunks.forEach(chunk => {
-        output += `\n${chunk.type}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})\n`
-        output += chunk.content
+        // Add special formatting for interfaces and types
+        if (chunk.type === 'interface' || chunk.type === 'type') {
+          output += `\n${chunk.type.toUpperCase()}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})\n`
+          
+          // For interfaces and types, add a structured display of properties first
+          if (chunk.metadata.typeDefinition?.properties?.length > 0) {
+            output += "```typescript\n"
+            output += `${chunk.type} ${chunk.name} {\n`
+            chunk.metadata.typeDefinition.properties.forEach(prop => {
+              output += `  ${prop.name}: ${prop.type};\n`
+            })
+            output += "}\n```\n\n"
+          } else if (chunk.metadata.childEntities?.length > 0) {
+            // If we have child entities but not in typeDefinition, show them
+            output += "```typescript\n"
+            output += `${chunk.type} ${chunk.name} {\n`
+            chunk.metadata.childEntities
+              .filter(entity => entity.type === 'property')
+              .forEach(entity => {
+                output += `  ${entity.content};\n`
+              })
+            output += "}\n```\n\n"
+          }
+          
+          // Show the actual content after the structured version
+          output += "Original Definition:\n"
+          output += "```typescript\n"
+          output += chunk.content
+          output += "\n```\n"
+        } else {
+          // For other types, just show the content
+          output += `\n${chunk.type}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})\n`
+          output += chunk.content
+        }
         
         // Add structured metadata if available
         if (chunk.metadata.relationshipContext) {
           const relations = chunk.metadata.relationshipContext
           
+          // Enhanced display for interface and component relationships
+          if (chunk.type === 'interface' && relations.usedInComponents?.length) {
+            output += `\n\n**Used by Components**: ${relations.usedInComponents.join(', ')}`
+          }
+          
+          if ((chunk.type === 'react-component' || chunk.type === 'function') && 
+              relations.relatedComponents?.length) {
+            // Filter out only interfaces from related components
+            const relatedInterfaces = relations.relatedComponents.filter(comp => 
+              comp.endsWith('Props') || comp.includes('Interface') || comp.includes('Type')
+            )
+            
+            if (relatedInterfaces.length > 0) {
+              output += `\n\n**Props Interface**: ${relatedInterfaces.join(', ')}`
+            }
+          }
+          
+          if (relations.extendsFrom?.length) {
+            output += `\n\n**Extends**: ${relations.extendsFrom.join(', ')}`
+          }
+          
+          if (relations.extendedBy?.length) {
+            output += `\n\n**Extended By**: ${relations.extendedBy.join(', ')}`
+          }
+          
+          // Standard relationship info
           if (relations.imports?.length) {
             output += `\n\nImports: ${relations.imports.join(', ')}`
           }
@@ -640,11 +766,12 @@ export function formatSearchResults(results: SearchResult[]): string {
           }
         }
         
-        // Add type definition information if available
+        // Add enhanced type definition information if available
         if (chunk.metadata.typeDefinition) {
           const typeDef = chunk.metadata.typeDefinition
           
-          if (typeDef.properties?.length) {
+          // We already displayed properties above for interfaces/types
+          if (typeDef.properties?.length && chunk.type !== 'interface' && chunk.type !== 'type') {
             output += `\n\nProperties:\n`
             typeDef.properties.forEach(prop => {
               output += `- ${prop.name}: ${prop.type}\n`
@@ -656,6 +783,14 @@ export function formatSearchResults(results: SearchResult[]): string {
             typeDef.methods.forEach(method => {
               output += `- ${method.name}(${method.parameters.join(', ')})\n`
             })
+          }
+          
+          if (typeDef.referencedBy?.length) {
+            output += `\n\nReferenced By: ${typeDef.referencedBy.join(', ')}`
+          }
+          
+          if (typeDef.isComponentProps) {
+            output += `\n\n(This is a Component Props interface)`
           }
         }
         

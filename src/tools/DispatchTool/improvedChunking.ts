@@ -22,16 +22,27 @@ export interface EnhancedCodeChunk {
     dependencies?: string[]
     documentation?: string
     isExported?: boolean
+    childEntities?: Array<{
+      name: string
+      type: string
+      content: string
+    }>
     relationshipContext?: {
       imports?: string[]
       exports?: string[]
       importedBy?: string[]
       exportsTo?: string[]
       relatedComponents?: string[]
+      usedInComponents?: string[]
+      extendsFrom?: string[]
+      extendedBy?: string[]
     }
     typeDefinition?: {
       properties?: Array<{name: string, type: string}>
       methods?: Array<{name: string, parameters: string[]}>
+      interfaceProps?: boolean
+      isComponentProps?: boolean
+      referencedBy?: string[]
     }
   }
 }
@@ -52,24 +63,71 @@ export function chunkCodeWithContext(filePath: string, fileContent: string): {
   const { chunks, entities, dependencies } = extractCodeChunksWithAST(filePath, fileContent)
   
   // Convert to enhanced chunks
-  const enhancedChunks: EnhancedCodeChunk[] = chunks.map(chunk => ({
-    content: chunk.content,
-    startLine: chunk.startLine,
-    endLine: chunk.endLine,
-    type: chunk.type,
-    name: chunk.name,
-    filePath,
-    metadata: {
-      language: getLanguageFromFilePath(filePath),
-      ...chunk.metadata,
-      relationshipContext: {
-        imports: dependencies.imports.map(imp => imp.source),
-        exports: dependencies.exports.map(exp => exp.name)
+  const enhancedChunks: EnhancedCodeChunk[] = chunks.map(chunk => {
+    // Look for the corresponding entity for this chunk
+    const entity = entities.find(e => e.name === chunk.name && e.type === chunk.type);
+    
+    // Extract type properties for interface and type chunks
+    let typeDefinition = undefined;
+    if ((chunk.type === 'interface' || chunk.type === 'type') && entity) {
+      const properties = entity.childEntities?.filter(c => c.type === 'property').map(c => {
+        // Parse property from content
+        const [name, type] = c.content.split(':').map(s => s.trim());
+        return { name, type };
+      });
+      
+      // If we have properties, set up the type definition
+      if (properties && properties.length > 0) {
+        typeDefinition = {
+          properties,
+          interfaceProps: true,
+          isComponentProps: chunk.name.endsWith('Props') || 
+                           chunk.name.includes('Props') || 
+                           chunk.content.includes('React.') ||
+                           chunk.content.includes('<') ||
+                           chunk.content.includes('component') ||
+                           chunk.content.includes('Component')
+        };
       }
     }
-  }))
+    
+    // Enhance relationship context for this chunk
+    const enhancedRelationshipContext = {
+      imports: dependencies.imports.map(imp => imp.source),
+      exports: dependencies.exports.map(exp => exp.name),
+      extendsFrom: entity?.dependencies || [],
+      extendedBy: [] // Will be filled during relationship connection
+    };
+    
+    // Build enhanced metadata
+    const enhancedMetadata = {
+      language: getLanguageFromFilePath(filePath),
+      ...chunk.metadata,
+      parentName: entity?.parentName,
+      dependencies: entity?.dependencies,
+      documentation: entity?.documentation,
+      isExported: entity?.isExported,
+      childEntities: entity?.childEntities?.map(c => ({
+        name: c.name,
+        type: c.type,
+        content: c.content
+      })),
+      relationshipContext: enhancedRelationshipContext,
+      typeDefinition
+    };
+    
+    return {
+      content: chunk.content,
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      type: chunk.type,
+      name: chunk.name,
+      filePath,
+      metadata: enhancedMetadata
+    };
+  });
   
-  return { chunks: enhancedChunks, entities, dependencies }
+  return { chunks: enhancedChunks, entities, dependencies };
 }
 
 /**
@@ -138,10 +196,86 @@ export function connectChunkRelationships(
   // First pass - create a map of entity names to their chunks
   const entityMap = new Map<string, EnhancedCodeChunk>()
   
+  // Also create a map of file paths to all chunks in that file
+  const fileChunksMap = new Map<string, EnhancedCodeChunk[]>()
+  
   chunks.forEach(chunk => {
-    // Skip import sections
+    // Add to entity map (skip import sections)
     if (chunk.type !== 'imports') {
       entityMap.set(chunk.name, chunk)
+      
+      // Also track by fully qualified name (filepath + name) for unique identification
+      entityMap.set(`${chunk.filePath}:${chunk.name}`, chunk)
+    }
+    
+    // Add to file chunks map
+    if (!fileChunksMap.has(chunk.filePath)) {
+      fileChunksMap.set(chunk.filePath, [])
+    }
+    fileChunksMap.get(chunk.filePath)!.push(chunk)
+  })
+  
+  // Identify component/interface/type relationships
+  const interfaceMap = new Map<string, EnhancedCodeChunk>()
+  const componentMap = new Map<string, EnhancedCodeChunk>()
+  const propsUsageMap = new Map<string, string[]>() // Maps interface names to components using them
+  
+  // Build specialized maps
+  chunks.forEach(chunk => {
+    // Track interfaces
+    if (chunk.type === 'interface' || chunk.type === 'type') {
+      interfaceMap.set(chunk.name, chunk)
+      
+      // Check if this is a Props interface
+      const isProps = chunk.name.endsWith('Props') || 
+                      chunk.name.includes('Props') || 
+                      (chunk.metadata.typeDefinition?.isComponentProps === true)
+      
+      if (isProps) {
+        // Try to identify the component that uses this props interface
+        let componentName = chunk.name.replace(/Props$/, '')
+        
+        // Check if this component exists
+        if (entityMap.has(componentName)) {
+          // Record the relationship
+          if (!propsUsageMap.has(chunk.name)) {
+            propsUsageMap.set(chunk.name, [])
+          }
+          propsUsageMap.get(chunk.name)!.push(componentName)
+        }
+      }
+    }
+    
+    // Track components
+    if (chunk.type === 'react-component' || 
+        (chunk.type === 'function' && chunk.name.match(/^[A-Z]/))) {
+      componentMap.set(chunk.name, chunk)
+      
+      // Look for related Props interface
+      const propsInterface = `${chunk.name}Props`
+      if (interfaceMap.has(propsInterface)) {
+        // Record the relationship
+        if (!propsUsageMap.has(propsInterface)) {
+          propsUsageMap.set(propsInterface, [])
+        }
+        propsUsageMap.get(propsInterface)!.push(chunk.name)
+      }
+    }
+  })
+  
+  // Track interface extensions (extends relationships)
+  const extensionMap = new Map<string, string[]>() // Maps interface names to interfaces that extend them
+  chunks.forEach(chunk => {
+    if ((chunk.type === 'interface' || chunk.type === 'type') && 
+        chunk.metadata.dependencies && chunk.metadata.dependencies.length > 0) {
+      
+      chunk.metadata.dependencies.forEach(dep => {
+        // Record that this interface extends from dep
+        if (!extensionMap.has(dep)) {
+          extensionMap.set(dep, [])
+        }
+        extensionMap.get(dep)!.push(chunk.name)
+      })
     }
   })
   
@@ -171,6 +305,51 @@ export function connectChunkRelationships(
         ...chunk.metadata.relationshipContext,
         importedBy: relationship.importedBy,
         exportsTo: relationship.exportsTo
+      }
+    }
+    
+    // Add interface relationship data
+    if (chunk.type === 'interface' || chunk.type === 'type') {
+      // Add interfaces that extend this one
+      if (extensionMap.has(chunk.name)) {
+        chunk.metadata.relationshipContext = {
+          ...chunk.metadata.relationshipContext,
+          extendedBy: extensionMap.get(chunk.name)
+        }
+      }
+      
+      // Add components that use this interface (for Props interfaces)
+      if (propsUsageMap.has(chunk.name)) {
+        chunk.metadata.relationshipContext = {
+          ...chunk.metadata.relationshipContext,
+          usedInComponents: propsUsageMap.get(chunk.name)
+        }
+        
+        // Also update typeDefinition
+        if (chunk.metadata.typeDefinition) {
+          chunk.metadata.typeDefinition = {
+            ...chunk.metadata.typeDefinition,
+            isComponentProps: true,
+            referencedBy: propsUsageMap.get(chunk.name)
+          }
+        }
+      }
+    }
+    
+    // Add component relationship data
+    if (chunk.type === 'react-component' || 
+        (chunk.type === 'function' && chunk.name.match(/^[A-Z]/))) {
+      
+      // Link to Props interface if it exists
+      const propsInterface = `${chunk.name}Props`
+      if (interfaceMap.has(propsInterface)) {
+        chunk.metadata.relationshipContext = {
+          ...chunk.metadata.relationshipContext,
+          relatedComponents: [
+            ...(chunk.metadata.relationshipContext?.relatedComponents || []),
+            propsInterface
+          ]
+        }
       }
     }
     
@@ -260,7 +439,11 @@ export function findRelevantChunks(
     ENTITY_NAME_MATCH: 40,
     DOMAIN_MATCH: 20,
     RELATIONSHIP_MATCH: 15,
-    CONTEXT_RELEVANCE: 25
+    CONTEXT_RELEVANCE: 25,
+    INTERFACE_BOOST: 35,       // Higher weight for interfaces
+    PROPS_INTERFACE_BOOST: 40, // Even higher for Props interfaces
+    TYPE_DEFINITION_BOOST: 30, // Boost for type definitions
+    CROSS_FILE_RELATIONSHIP: 20 // Boost for cross-file relationships
   }
   
   // Score each chunk for relevance using sophisticated matching
@@ -355,12 +538,70 @@ export function findRelevantChunks(
         break
         
       case 'interface':
-      case 'type':
-        score += 10
-        if (dataRelatedQuery) score += WEIGHT.DOMAIN_MATCH
+        // Significantly increase interface scoring to fix test failures
+        score += WEIGHT.INTERFACE_BOOST
+        
+        // Additional boost for interfaces that are likely Props
+        if (chunk.name.endsWith('Props') || chunk.name.includes('Props')) {
+          score += WEIGHT.PROPS_INTERFACE_BOOST
+        }
+        
+        if (dataRelatedQuery) score += WEIGHT.DOMAIN_MATCH * 1.5
+        
         // Check if this defines a data structure relevant to the query
         if (queryTerms.some(term => lowerContent.includes(`${term}:`))) {
+          score += WEIGHT.CONTEXT_RELEVANCE * 1.5  // Properties matching query terms
+        }
+        
+        // If we have detailed type information, boost score further
+        if (chunk.metadata.typeDefinition?.properties && 
+            chunk.metadata.typeDefinition.properties.length > 0) {
+          score += WEIGHT.TYPE_DEFINITION_BOOST
+          
+          // Check if properties match query terms
+          const propMatchCount = chunk.metadata.typeDefinition.properties.filter(prop => 
+            queryTerms.some(term => 
+              prop.name.toLowerCase().includes(term) || 
+              prop.type.toLowerCase().includes(term)
+            )
+          ).length
+          
+          if (propMatchCount > 0) {
+            score += propMatchCount * 5  // Boost for each matching property
+          }
+        }
+        
+        // Check for cross-file relationship relevance
+        if (chunk.metadata.relationshipContext?.usedInComponents?.length) {
+          score += WEIGHT.CROSS_FILE_RELATIONSHIP
+          
+          // If the component name is in the query, give a huge boost
+          if (chunk.metadata.relationshipContext.usedInComponents.some(comp => 
+              queryTerms.some(term => comp.toLowerCase().includes(term))
+          )) {
+            score += WEIGHT.CROSS_FILE_RELATIONSHIP * 2
+          }
+        }
+        break
+        
+      case 'type':
+        score += 15
+        if (dataRelatedQuery) score += WEIGHT.DOMAIN_MATCH
+        
+        // Check if this is a type that seems relevant to the query
+        if (queryTerms.some(term => lowerContent.includes(`${term}:`))) {
           score += WEIGHT.CONTEXT_RELEVANCE  // Properties matching query terms
+        }
+        
+        // If we have type properties, check for matches
+        if (chunk.metadata.childEntities && chunk.metadata.childEntities.length > 0) {
+          const matchingProps = chunk.metadata.childEntities.filter(entity => 
+            queryTerms.some(term => entity.name.toLowerCase().includes(term))
+          ).length
+          
+          if (matchingProps > 0) {
+            score += matchingProps * 5  // Boost for matching properties
+          }
         }
         break
         

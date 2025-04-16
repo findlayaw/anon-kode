@@ -417,114 +417,294 @@ export const ImprovedDispatchTool = {
     }
 
     // Create a map of file relationships
-    const fileRelationships = new Map<string, { importedBy: string[], exportsTo: string[] }>()
+    const fileRelationships = new Map<string, { 
+      importedBy: string[], 
+      exportsTo: string[], 
+      components: string[],
+      interfaces: string[],
+      types: string[]
+    }>()
     
     // Calculate file relationships if we have include_dependencies
     if (include_dependencies && searchResults.length > 0) {
       console.log('Calculating file relationships...')
       
-      // First, create a map of all exports
+      // First, create a map of all exports and entity types
       const exportMap = new Map<string, string>()
+      const componentMap = new Map<string, string>()
+      const interfaceMap = new Map<string, string>()
+      const typeMap = new Map<string, string>()
+      const propsInterfaceMap = new Map<string, string>() // Special map for Props interfaces
       
+      // First pass - collect all entity information
       searchResults.forEach(result => {
-        // Get all exports from this file's chunks
-        result.chunks
-          .filter(chunk => chunk.metadata.isExported)
-          .forEach(chunk => {
-            exportMap.set(chunk.name, result.filePath)
-          })
-      })
+        // Initialize the relationship object
+        fileRelationships.set(result.filePath, { 
+          importedBy: [], exportsTo: [], components: [], interfaces: [], types: [] 
+        });
+        
+        // Categorize entities in this file
+        const components: string[] = [];
+        const interfaces: string[] = [];
+        const types: string[] = [];
+        
+        // Process chunks to categorize entities
+        result.chunks.forEach(chunk => {
+          // Track exports
+          if (chunk.metadata.isExported) {
+            exportMap.set(chunk.name, result.filePath);
+          }
+          
+          // Track components
+          if (chunk.type === 'react-component' || 
+             (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) {
+            components.push(chunk.name);
+            componentMap.set(chunk.name, result.filePath);
+          }
+          
+          // Track interfaces
+          if (chunk.type === 'interface') {
+            interfaces.push(chunk.name);
+            interfaceMap.set(chunk.name, result.filePath);
+            
+            // Special tracking for Props interfaces
+            if (chunk.name.endsWith('Props') || chunk.name.includes('Props')) {
+              propsInterfaceMap.set(chunk.name, result.filePath);
+              
+              // Try to identify the component this props interface belongs to
+              const possibleComponentName = chunk.name.replace(/Props$/, '');
+              if (componentMap.has(possibleComponentName)) {
+                // Record the component-props relationship
+                const componentFilePath = componentMap.get(possibleComponentName)!;
+                const componentFileRel = fileRelationships.get(componentFilePath);
+                if (componentFileRel) {
+                  if (!componentFileRel.interfaces.includes(chunk.name)) {
+                    componentFileRel.interfaces.push(chunk.name);
+                  }
+                }
+              }
+            }
+          }
+          
+          // Track types
+          if (chunk.type === 'type') {
+            types.push(chunk.name);
+            typeMap.set(chunk.name, result.filePath);
+          }
+        });
+        
+        // Update the file relationship object with entity lists
+        const relationship = fileRelationships.get(result.filePath)!;
+        relationship.components = components;
+        relationship.interfaces = interfaces;
+        relationship.types = types;
+      });
       
-      // Then, for each file, check imports against exports
+      // Second pass - resolve import/export relationships between files
       searchResults.forEach(result => {
-        const importedBy: string[] = []
-        const exportsTo: string[] = []
+        const importedBy: string[] = [];
+        const exportsTo: string[] = [];
         
         // Get all imports from this file's chunks
         const imports = result.chunks
           .filter(chunk => chunk.type === 'imports')
-          .flatMap(chunk => chunk.metadata.relationshipContext?.imports || [])
+          .flatMap(chunk => chunk.metadata.relationshipContext?.imports || []);
         
         // For each import, check if it's exported by one of our files
         imports.forEach(importPath => {
           // For relative imports, resolve the path
           if (importPath.startsWith('.')) {
-            const resolvedPath = path.resolve(path.dirname(result.filePath), importPath)
+            const resolvedPath = path.resolve(path.dirname(result.filePath), importPath);
             
-            // Check if this file exists in our results
+            // Check various file extensions
+            const possiblePaths = [
+              resolvedPath,
+              `${resolvedPath}.js`,
+              `${resolvedPath}.jsx`,
+              `${resolvedPath}.ts`,
+              `${resolvedPath}.tsx`,
+              // Also check for index files
+              `${resolvedPath}/index.js`,
+              `${resolvedPath}/index.jsx`,
+              `${resolvedPath}/index.ts`,
+              `${resolvedPath}/index.tsx`
+            ];
+            
+            // Find the matching file in our results
             const matchingResult = searchResults.find(r => 
-              r.filePath === resolvedPath || 
-              r.filePath === `${resolvedPath}.js` || 
-              r.filePath === `${resolvedPath}.jsx` || 
-              r.filePath === `${resolvedPath}.ts` || 
-              r.filePath === `${resolvedPath}.tsx`
-            )
+              possiblePaths.includes(r.filePath)
+            );
             
             if (matchingResult) {
-              exportsTo.push(matchingResult.filePath)
+              exportsTo.push(matchingResult.filePath);
             }
           }
-        })
+        });
         
-        // For each chunk, check if its name is imported by other files
-        result.chunks
-          .filter(chunk => chunk.metadata.isExported)
-          .forEach(chunk => {
-            // Check if this export is imported by any of our files
-            searchResults.forEach(otherResult => {
-              if (otherResult.filePath === result.filePath) return
-              
-              const otherImports = otherResult.chunks
-                .filter(chunk => chunk.type === 'imports')
-                .flatMap(chunk => chunk.metadata.relationshipContext?.imports || [])
-              
-              if (otherImports.some(imp => {
-                // For relative imports, resolve the path
-                if (imp.startsWith('.')) {
-                  const resolvedPath = path.resolve(path.dirname(otherResult.filePath), imp)
-                  return resolvedPath === result.filePath || 
-                        resolvedPath === `${result.filePath}.js` || 
-                        resolvedPath === `${result.filePath}.jsx` || 
-                        resolvedPath === `${result.filePath}.ts` || 
-                        resolvedPath === `${result.filePath}.tsx`
-                }
-                return false
-              })) {
-                importedBy.push(otherResult.filePath)
+        // For each exported chunk, check if it's imported by other files
+        const exportedChunks = result.chunks.filter(chunk => chunk.metadata.isExported);
+        
+        if (exportedChunks.length > 0) {
+          // Check if other files import from this file
+          searchResults.forEach(otherResult => {
+            if (otherResult.filePath === result.filePath) return;
+            
+            const otherImports = otherResult.chunks
+              .filter(chunk => chunk.type === 'imports')
+              .flatMap(chunk => chunk.metadata.relationshipContext?.imports || []);
+            
+            // Check if any imports in otherResult reference this file
+            if (otherImports.some(imp => {
+              // For relative imports, resolve the path
+              if (imp.startsWith('.')) {
+                const resolvedPath = path.resolve(path.dirname(otherResult.filePath), imp);
+                
+                // Check various file patterns
+                return (
+                  resolvedPath === result.filePath || 
+                  resolvedPath === result.filePath.replace(/\.[^.]+$/, '') || // Without extension 
+                  `${resolvedPath}.js` === result.filePath || 
+                  `${resolvedPath}.jsx` === result.filePath || 
+                  `${resolvedPath}.ts` === result.filePath || 
+                  `${resolvedPath}.tsx` === result.filePath
+                );
               }
-            })
-          })
+              return false;
+            })) {
+              importedBy.push(otherResult.filePath);
+            }
+          });
+        }
         
         // Add to relationships map
-        fileRelationships.set(result.filePath, { importedBy, exportsTo })
-      })
+        const relationship = fileRelationships.get(result.filePath)!;
+        relationship.importedBy = importedBy;
+        relationship.exportsTo = exportsTo;
+      });
       
-      // Update chunks with the relationship data
+      // Third pass - identify component-props relationships that might have been missed
+      searchResults.forEach(result => {
+        // Find interfaces in this file that might be component props
+        const propsInterfaces = result.chunks.filter(chunk => 
+          chunk.type === 'interface' && 
+          (chunk.name.endsWith('Props') || chunk.name.includes('Props'))
+        );
+        
+        propsInterfaces.forEach(propsInterface => {
+          // Try to find a component that might use these props
+          const possibleComponentName = propsInterface.name.replace(/Props$/, '');
+          
+          // Look for this component in our search results
+          searchResults.forEach(componentResult => {
+            const componentChunk = componentResult.chunks.find(chunk => 
+              (chunk.type === 'react-component' || 
+               (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) && 
+              chunk.name === possibleComponentName
+            );
+            
+            if (componentChunk) {
+              // Update the interface chunk with the component relationship
+              propsInterface.metadata.relationshipContext = {
+                ...propsInterface.metadata.relationshipContext,
+                usedInComponents: [
+                  ...(propsInterface.metadata.relationshipContext?.usedInComponents || []),
+                  componentChunk.name
+                ]
+              };
+              
+              // Update the component chunk with the props relationship
+              componentChunk.metadata.relationshipContext = {
+                ...componentChunk.metadata.relationshipContext,
+                relatedComponents: [
+                  ...(componentChunk.metadata.relationshipContext?.relatedComponents || []),
+                  propsInterface.name
+                ]
+              };
+              
+              // Also update the type definition
+              if (propsInterface.metadata.typeDefinition) {
+                propsInterface.metadata.typeDefinition = {
+                  ...propsInterface.metadata.typeDefinition,
+                  isComponentProps: true,
+                  referencedBy: [
+                    ...(propsInterface.metadata.typeDefinition.referencedBy || []),
+                    componentChunk.name
+                  ]
+                };
+              }
+            }
+          });
+        });
+      });
+      
+      // Update all chunks with the relationship data
       searchResults = searchResults.map(result => {
-        const relationship = fileRelationships.get(result.filePath)
+        const relationship = fileRelationships.get(result.filePath);
         
         if (relationship) {
           // Update each chunk with the file relationship data
-          const updatedChunks = result.chunks.map(chunk => ({
-            ...chunk,
-            metadata: {
-              ...chunk.metadata,
-              relationshipContext: {
-                ...chunk.metadata.relationshipContext,
-                importedBy: relationship.importedBy,
-                exportsTo: relationship.exportsTo
+          const updatedChunks = result.chunks.map(chunk => {
+            // Add entity-specific relationship data
+            let entityRelationships = {};
+            
+            // For interfaces, add special relationship data
+            if (chunk.type === 'interface') {
+              // Find components using this interface
+              const usedInComponents = relationship.components.filter(comp => {
+                // Check if this could be a props interface for the component
+                return (
+                  chunk.name === `${comp}Props` || 
+                  chunk.name.includes(`${comp}Props`) ||
+                  comp.includes(chunk.name.replace(/Props$/, ''))
+                );
+              });
+              
+              if (usedInComponents.length > 0) {
+                entityRelationships = {
+                  usedInComponents
+                };
               }
             }
-          }))
+            
+            // For components, add related interfaces
+            if (chunk.type === 'react-component' || 
+               (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) {
+              
+              // Find interfaces that might be props for this component
+              const relatedInterfaces = relationship.interfaces.filter(intf => 
+                intf === `${chunk.name}Props` || 
+                intf.includes(`${chunk.name}Props`)
+              );
+              
+              if (relatedInterfaces.length > 0) {
+                entityRelationships = {
+                  relatedComponents: relatedInterfaces
+                };
+              }
+            }
+            
+            return {
+              ...chunk,
+              metadata: {
+                ...chunk.metadata,
+                relationshipContext: {
+                  ...chunk.metadata.relationshipContext,
+                  importedBy: relationship.importedBy,
+                  exportsTo: relationship.exportsTo,
+                  ...entityRelationships
+                }
+              }
+            };
+          });
           
           return {
             ...result,
             chunks: updatedChunks
-          }
+          };
         }
         
-        return result
-      })
+        return result;
+      });
     }
     
     // Rank results by relevance to the search terms
