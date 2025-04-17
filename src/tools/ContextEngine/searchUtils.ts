@@ -385,90 +385,110 @@ export function createContentSearchPatterns(
 ): string[] {
   const patterns = []
   
+  // Add direct text matching patterns for imports - these are the most reliable
+  // and will help prevent hallucinations about component relationships
+  for (const fileName of potentialFileNames) {
+    // Exact import patterns for highly precise matching
+    patterns.push(`import\\s+${fileName}\\s+from\\s+['"](.*?)['"]`)
+    patterns.push(`import\\s+{[^}]*\\b${fileName}\\b[^}]*}\\s+from\\s+['"](.*?)['"]`)
+    patterns.push(`import\\s+\\*\\s+as\\s+\\w+\\s+from\\s+['"](.*?)['"]`)
+  }
+  
   // If search mode is keyword, focus on exact matches
   if (searchMode === 'keyword') {
     // For each potential file name, look for declarations
     for (const fileName of potentialFileNames) {
-      // Look for component/class declarations
-      patterns.push(`(class|function|const)\\s+${fileName}\\b`)
-      patterns.push(`export\\s+(default\\s+)?(class|function|const)\\s+${fileName}\\b`)
+      // Look for component/class declarations - add word boundaries for precision
+      patterns.push(`\\b(class|function|const)\\s+${fileName}\\b`)
+      patterns.push(`\\bexport\\s+(default\\s+)?(class|function|const)\\s+${fileName}\\b`)
       
-      // Look for interface/type declarations
-      patterns.push(`(interface|type)\\s+${fileName}\\b`)
-      patterns.push(`export\\s+(interface|type)\\s+${fileName}\\b`)
+      // Look for interface/type declarations - add word boundaries for precision
+      patterns.push(`\\b(interface|type)\\s+${fileName}\\b`)
+      patterns.push(`\\bexport\\s+(interface|type)\\s+${fileName}\\b`)
       
-      // Look for variable declarations
-      patterns.push(`(const|let|var)\\s+${fileName}\\s*=`)
+      // Look for variable declarations - add word boundaries for precision
+      patterns.push(`\\b(const|let|var)\\s+${fileName}\\s*=\\b`)
     }
     
-    // Look for terms in function/method implementations
+    // Look for terms in function/method implementations - only use terms longer than 3 chars
     for (const term of searchTerms) {
-      // Skip short terms to avoid too many matches
       if (term.length < 4) continue
       
-      patterns.push(`function\\s+\\w*${term}\\w*\\s*\\(`)
-      patterns.push(`const\\s+\\w*${term}\\w*\\s*=\\s*(\\(|async\\s+)?`)
-      patterns.push(`\\w*${term}\\w*\\s*\\([^)]*\\)\\s*{`)
-      patterns.push(`\\w*${term}\\w*\\s*=\\s*\\([^)]*\\)\\s*=>\\s*{`)
+      // Add word boundaries for more precision
+      patterns.push(`\\bfunction\\s+\\w*${term}\\w*\\s*\\(`)
+      patterns.push(`\\bconst\\s+\\w*${term}\\w*\\s*=\\s*(\\(|async\\s+)?`)
+      patterns.push(`\\b\\w*${term}\\w*\\s*\\([^)]*\\)\\s*{`)
+      patterns.push(`\\b\\w*${term}\\w*\\s*=\\s*\\([^)]*\\)\\s*=>\\s*{`)
     }
   } else {
     // For hybrid or semantic mode, include both exact matches and broader patterns
     
-    // Add patterns for component declarations
-    patterns.push(`(function|class|const)\\s+[A-Z]\\w+\\s*(\\(|extends|{)`)
-    patterns.push(`export\\s+(default\\s+)?(function|class|const)\\s+[A-Z]\\w+`)
+    // Add patterns for component declarations with word boundaries
+    patterns.push(`\\b(function|class|const)\\s+[A-Z]\\w+\\s*(\\(|extends|{)`)
+    patterns.push(`\\bexport\\s+(default\\s+)?(function|class|const)\\s+[A-Z]\\w+`)
     
-    // Add patterns for hook declarations
-    patterns.push(`(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
-    patterns.push(`export\\s+(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
+    // Add patterns for hook declarations with word boundaries
+    patterns.push(`\\b(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
+    patterns.push(`\\bexport\\s+(function|const)\\s+use[A-Z]\\w+\\s*\\(`)
     
-    // Add patterns for context/provider declarations
-    patterns.push(`(const|export const)\\s+\\w+Context\\s*=`)
-    patterns.push(`(function|const)\\s+\\w+Provider\\s*\\(`)
+    // Add patterns for context/provider declarations with word boundaries
+    patterns.push(`\\b(const|export const)\\s+\\w+Context\\s*=`)
+    patterns.push(`\\b(function|const)\\s+\\w+Provider\\s*\\(`)
     
-    // Add patterns for interface and type declarations
-    patterns.push(`(interface|type)\\s+\\w+\\s*\\{`)
-    patterns.push(`export\\s+(interface|type)\\s+\\w+\\s*\\{`)
-    patterns.push(`(interface|type)\\s+\\w+(Props|State|Data|Config)\\s*\\{`)
+    // Add patterns for interface and type declarations with word boundaries
+    patterns.push(`\\b(interface|type)\\s+\\w+\\s*\\{`)
+    patterns.push(`\\bexport\\s+(interface|type)\\s+\\w+\\s*\\{`)
+    patterns.push(`\\b(interface|type)\\s+\\w+(Props|State|Data|Config)\\s*\\{`)
     
-    // Add patterns for service and utility declarations
-    patterns.push(`(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
-    patterns.push(`export\\s+(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
+    // Add patterns for service and utility declarations with word boundaries
+    patterns.push(`\\b(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
+    patterns.push(`\\bexport\\s+(class|const)\\s+\\w+(Service|Client|API|Util|Helper)\\s*`)
   }
   
-  // Add some broader patterns regardless of search mode
-  // Look for JSX components in render methods
-  patterns.push(`<([A-Z]\\w+)([^>]*?)>`)
-  
-  // Look for imports/exports for potential file names
+  // Add direct text search for imports specifically for named components
   for (const fileName of potentialFileNames) {
-    patterns.push(`import\\s+{[^}]*${fileName}[^}]*}\\s+from`)
-    patterns.push(`import\\s+${fileName}\\s+from`)
-    patterns.push(`export\\s+{[^}]*${fileName}[^}]*}`)
-    patterns.push(`export\\s+(default\\s+)?${fileName}`)
+    if (fileName.match(/^[A-Z]/)) {  // Only for components (starting with uppercase)
+      // This helps find files that import the component (direct import search)
+      patterns.push(`\\bimport\\s+{[^}]*\\b${fileName}\\b[^}]*}\\s+from`)
+      patterns.push(`\\bimport\\s+${fileName}\\s+from`)
+      
+      // Find where components are used in JSX
+      patterns.push(`<\\s*${fileName}\\s*[^>]*>`) // Opening tag
+      patterns.push(`<\\s*${fileName}\\s*[^>]*/\\s*>`) // Self-closing tag
+    }
   }
   
-  // Enhanced patterns for Form and Fields components
+  // Look for exports specifically 
+  for (const fileName of potentialFileNames) {
+    patterns.push(`\\bexport\\s+{[^}]*\\b${fileName}\\b[^}]*}`)
+    patterns.push(`\\bexport\\s+(default\\s+)?${fileName}\\b`)
+    
+    // Look for direct object property assignments that might indicate relationships
+    patterns.push(`\\b${fileName}:\\s*[^,}]+`)
+    patterns.push(`\\b${fileName}=\\s*[^,}]+`)
+  }
+  
+  // Enhanced patterns for Form and Fields components with word boundaries
   for (const fileName of potentialFileNames) {
     // For Fields components
     if (fileName.includes('Fields')) {
-      patterns.push(`(interface|type)\\s+${fileName}Props\\s*\\{`)
-      patterns.push(`export\\s+(interface|type)\\s+${fileName}Props\\s*\\{`)
+      patterns.push(`\\b(interface|type)\\s+${fileName}Props\\s*\\{`)
+      patterns.push(`\\bexport\\s+(interface|type)\\s+${fileName}Props\\s*\\{`)
       
       // Base name patterns (Asset from AssetFields)
       const baseName = fileName.replace(/Fields$/, '')
-      patterns.push(`(interface|type)\\s+${baseName}FieldsProps\\s*\\{`)
+      patterns.push(`\\b(interface|type)\\s+${baseName}FieldsProps\\s*\\{`)
       patterns.push(`\\b${baseName}\\b`)
     }
     
     // For Form components
     if (fileName.includes('Form')) {
-      patterns.push(`(interface|type)\\s+${fileName}Data\\s*\\{`)
-      patterns.push(`export\\s+(interface|type)\\s+${fileName}Data\\s*\\{`)
+      patterns.push(`\\b(interface|type)\\s+${fileName}Data\\s*\\{`)
+      patterns.push(`\\bexport\\s+(interface|type)\\s+${fileName}Data\\s*\\{`)
       
       // Base name patterns (Trade from TradeForm)
       const baseName = fileName.replace(/Form$/, '')
-      patterns.push(`(interface|type)\\s+${baseName}FormData\\s*\\{`)
+      patterns.push(`\\b(interface|type)\\s+${baseName}FormData\\s*\\{`)
       patterns.push(`\\b${baseName}\\b`)
     }
   }
@@ -781,14 +801,136 @@ function hashString(str: string): number {
  * @param maxResults Maximum number of results to return
  * @returns Enhanced search results
  */
+/**
+ * Detect direct import relationships between files
+ * This function scans file content for explicit import statements
+ * to find concrete evidence of relationships
+ * 
+ * @param results Search results to analyze
+ * @returns Updated search results with verified import relationships
+ */
+export function detectDirectImportRelationships(results: SearchResult[]): SearchResult[] {
+  // Create a map of components/entities to their file paths
+  const entityMap = new Map<string, string>();
+  
+  // First pass: build the entity map
+  results.forEach(result => {
+    const fileBaseName = path.basename(result.filePath, path.extname(result.filePath));
+    
+    // Add the file basename as an entity
+    entityMap.set(fileBaseName, result.filePath);
+    
+    // Also add any exported entities from chunks
+    if (result.chunks) {
+      result.chunks.forEach(chunk => {
+        if (chunk.metadata.isExported) {
+          entityMap.set(chunk.name, result.filePath);
+        }
+      });
+    }
+  });
+  
+  // Second pass: scan for imports and update relationships
+  return results.map(result => {
+    // Skip if no chunks to analyze
+    if (!result.chunks || result.chunks.length === 0) {
+      return result;
+    }
+    
+    // Look for import statements in the file content
+    const importRegex = /import\s+(?:{([^}]+)}|(\w+)|\*\s+as\s+(\w+))\s+from\s+['"]([^'"]+)['"]/g;
+    let match;
+    const verifiedImports = new Set<string>();
+    const verifiedImportPaths = new Set<string>();
+    
+    // Reset to ensure we find all matches
+    importRegex.lastIndex = 0;
+    
+    while ((match = importRegex.exec(result.content)) !== null) {
+      const namedImports = match[1] ? match[1].split(',').map(s => s.trim().replace(/\s+as\s+\w+$/, '')) : [];
+      const defaultImport = match[2] ? [match[2]] : [];
+      const namespaceImport = match[3] ? [match[3]] : [];
+      const importPath = match[4];
+      
+      // Combine all types of imports
+      const allImports = [...namedImports, ...defaultImport, ...namespaceImport];
+      
+      // Record all imports
+      allImports.forEach(importName => {
+        if (importName && importName.length > 0) {
+          verifiedImports.add(importName);
+        }
+      });
+      
+      // Record the import path
+      if (importPath) {
+        verifiedImportPaths.add(importPath);
+      }
+    }
+    
+    // Update chunks with verified import relationships
+    const updatedChunks = result.chunks.map(chunk => {
+      // Initialize relationship context if needed
+      if (!chunk.metadata.relationshipContext) {
+        chunk.metadata.relationshipContext = {};
+      }
+      
+      // For each entity, check if it's imported in this file
+      const verifiedRelatedComponents: string[] = [];
+      
+      // Only include verified relationships based on direct evidence
+      entityMap.forEach((filePath, entityName) => {
+        if (verifiedImports.has(entityName)) {
+          verifiedRelatedComponents.push(entityName);
+        }
+      });
+      
+      // If this is an export, check where it might be imported
+      if (chunk.metadata.isExported) {
+        // Find other files that might import this entity
+        const potentialImporters: string[] = [];
+        
+        results.forEach(otherResult => {
+          if (otherResult.filePath !== result.filePath) {
+            const otherImportRegex = new RegExp(`import\\s+(?:{[^}]*\\b${chunk.name}\\b[^}]*}|${chunk.name})\\s+from`);
+            if (otherImportRegex.test(otherResult.content)) {
+              potentialImporters.push(otherResult.filePath);
+            }
+          }
+        });
+        
+        // Add the verified importers
+        if (potentialImporters.length > 0) {
+          chunk.metadata.relationshipContext.importedBy = potentialImporters;
+        }
+      }
+      
+      // Add verified related components
+      if (verifiedRelatedComponents.length > 0) {
+        chunk.metadata.relationshipContext.relatedComponents = verifiedRelatedComponents;
+      }
+      
+      return chunk;
+    });
+    
+    return {
+      ...result,
+      chunks: updatedChunks
+    };
+  });
+}
+
 export function enhanceSearchResults(
   results: SearchResult[],
   searchTerms: string[],
   potentialFileNames: string[],
   maxResults: number = 10
 ): SearchResult[] {
-  // First, identify match types and assign confidence scores
-  const enhancedResults = results.map(result => {
+  // First, detect direct import relationships using text evidence
+  const resultsWithRelationships = detectDirectImportRelationships(results);
+  
+  // Then, identify match types and assign confidence scores
+  const enhancedResults = resultsWithRelationships.map(result => {
     // Calculate a confidence score from 0 to 1
     let confidenceScore = result.relevanceScore / 100
     confidenceScore = Math.min(Math.max(confidenceScore, 0), 1)
@@ -804,7 +946,7 @@ export function enhanceSearchResults(
       // Boost confidence for exact matches
       confidenceScore = Math.min(confidenceScore + 0.3, 1.0)
     } 
-    // Check for inferred match - the file has relationship with other files
+    // Check for inferred match - the file has relationship with other files (using verified relationships)
     else if (result.chunks && result.chunks.some(chunk => 
       chunk.metadata.relationshipContext && 
       (chunk.metadata.relationshipContext.importedBy?.length > 0 ||
@@ -813,60 +955,20 @@ export function enhanceSearchResults(
        chunk.metadata.relationshipContext.usedInComponents?.length > 0)
     )) {
       matchType = 'inferred'
+      // Boost confidence for verified relationships
+      confidenceScore = Math.min(confidenceScore + 0.2, 1.0)
     }
     // Check for synthetic results - very low confidence
     else if (confidenceScore < 0.3) {
       matchType = 'synthetic'
     }
     
-    // Add supplementary inferred relationship data if missing
-    const updatedChunks = result.chunks ? result.chunks.map(chunk => {
-      // Skip if already has relationship data
-      if (chunk.metadata.relationshipContext && 
-          (chunk.metadata.relationshipContext.relatedComponents?.length > 0 ||
-           chunk.metadata.relationshipContext.usedInComponents?.length > 0)) {
-        return chunk
-      }
-      
-      // Try to infer relationships based on patterns
-      let inferred: { relatedComponents?: string[], usedInComponents?: string[] } = {}
-      
-      // For interfaces that might be props
-      if (chunk.type === 'interface' && 
-          (chunk.name.endsWith('Props') || chunk.name.includes('Props'))) {
-        // Try to find the component by removing 'Props' from the interface name
-        const possibleComponentName = chunk.name.replace(/Props$/, '')
-        
-        inferred.usedInComponents = [possibleComponentName]
-      }
-      
-      // For components that might use props
-      if ((chunk.type === 'react-component' || chunk.type === 'function') &&
-          /^[A-Z]/.test(chunk.name)) {
-        // Try to find the props interface by adding 'Props' to the component name
-        const possiblePropsName = `${chunk.name}Props`
-        
-        inferred.relatedComponents = [possiblePropsName]
-      }
-      
-      // Update chunk metadata
-      return {
-        ...chunk,
-        metadata: {
-          ...chunk.metadata,
-          relationshipContext: {
-            ...chunk.metadata.relationshipContext,
-            ...inferred
-          }
-        }
-      }
-    }) : undefined
-    
+    // We no longer add inferred relationships - only use verified ones
     return {
       ...result,
       matchType,
       confidenceScore,
-      chunks: updatedChunks
+      chunks: result.chunks // Use the chunks with verified relationships
     }
   })
   

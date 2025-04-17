@@ -163,13 +163,15 @@ export const ContextEngine = {
         })
       }
 
-      // Add search metadata for diagnostics
+      // Add search metadata for diagnostics including token counts
       const searchMetadata = [
         `Search filters: ${filters.length > 0 ? filters.join(', ') : 'none'}`,
         `Search mode: ${search_mode}`,
         `Model: ${result.modelUsed === 'small' ? smallModelName : largeModelName}`,
         `Escalated: ${result.escalated ? 'Yes' : 'No'}`,
-        `Duration: ${(result.durationMs / 1000).toFixed(2)}s`
+        `Duration: ${(result.durationMs / 1000).toFixed(2)}s`,
+        `Input tokens: ${result.inputTokens ? result.inputTokens.toLocaleString() : 'unknown'}`,
+        `Output tokens: ${result.outputTokens ? result.outputTokens.toLocaleString() : 'unknown'}`
       ];
       
       // Add diagnostic info if result doesn't contain useful content

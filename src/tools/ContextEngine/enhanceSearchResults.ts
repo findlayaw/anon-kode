@@ -75,11 +75,15 @@ export function validateEntityReferences(result: SearchResult, allResults: Searc
 
 /**
  * Perform a deep content validation of search results against actual files
+ * with improved structure and signature checking
  * 
  * @param results The search results to validate
  * @returns Search results with validation data
  */
 export function validateSearchResultContent(results: SearchResult[]): SearchResult[] {
+  // Import parser functions for structural analysis
+  const { parseCodeWithAST, extractCodeChunksWithAST } = require('./improvedParser');
+  
   // Enhanced validation with detailed logging
   return results.map(result => {
     console.log(`Validating result for file: ${result.filePath}`);
@@ -100,7 +104,8 @@ export function validateSearchResultContent(results: SearchResult[]): SearchResu
           fileExists: false,
           contentMatches: false,
           interfacesVerified: false,
-          componentsVerified: false
+          componentsVerified: false,
+          lastModified: null
         }
       };
     }
@@ -109,6 +114,10 @@ export function validateSearchResultContent(results: SearchResult[]): SearchResu
     try {
       console.log(`- File exists, reading content`);
       const actualContent = fs.readFileSync(result.filePath, 'utf-8');
+      
+      // Get file stats to check last modified time
+      const fileStats = fs.statSync(result.filePath);
+      const lastModified = fileStats.mtime.getTime();
       
       // Compare content length as a basic check
       const contentLengthMatches = Math.abs(actualContent.length - result.content.length) < 100;
@@ -123,70 +132,246 @@ export function validateSearchResultContent(results: SearchResult[]): SearchResu
       console.log(`- File contains interfaces/types: ${hasInterfaces ? 'Yes' : 'No'}`);
       console.log(`- File contains components/functions: ${hasComponents ? 'Yes' : 'No'}`);
       
-      // Check if chunks match content
+      // Check if chunks match content - improved with structural analysis
       let chunksVerified = true;
       let interfacesVerified = true;
       let componentsVerified = true;
       
+      // Try to parse the actual file content for accurate structure comparison
+      let actualEntities = [];
+      let actualMethods = new Set();
+      let actualImports = [];
+      let actualInterfaces = new Map();
+      let actualTypes = new Map();
+      let actualComponents = new Map();
+      
+      try {
+        // Parse the actual code structure
+        const { entities, dependencies } = parseCodeWithAST(result.filePath, actualContent);
+        actualEntities = entities;
+        
+        // Build lookup maps for faster verification
+        entities.forEach(entity => {
+          if (entity.type === 'interface') {
+            actualInterfaces.set(entity.name, entity);
+          } else if (entity.type === 'type') {
+            actualTypes.set(entity.name, entity);
+          } else if (entity.type === 'react-component' || entity.type === 'function') {
+            actualComponents.set(entity.name, entity);
+          } else if (entity.type === 'method') {
+            actualMethods.add(entity.name);
+          }
+        });
+        
+        // Store imports for validation
+        actualImports = dependencies.imports;
+        
+        console.log(`- Found ${actualInterfaces.size} interfaces, ${actualTypes.size} types, ${actualComponents.size} components in actual file`);
+      } catch (parseError) {
+        console.log(`- Structural parsing failed, falling back to text-based verification: ${parseError.message}`);
+      }
+      
+      // Track specific details on verification failures for better reporting
+      const verificationDetails = {
+        missingEntities: [],
+        structuralMismatches: [],
+        methodMismatches: [],
+        implementationMismatches: []
+      };
+      
       if (result.chunks && result.chunks.length > 0) {
         console.log(`- Verifying ${result.chunks.length} chunks`);
         
-        // Verify each chunk is contained in the actual content
+        // Verify each chunk against the parsed structure and content
         for (const chunk of result.chunks) {
           console.log(`  - Chunk: ${chunk.type} ${chunk.name}`);
           
-          // Clean up chunk content for comparison (whitespace differences)
-          const cleanedChunkContent = chunk.content
-            .replace(/\s+/g, ' ')
-            .trim();
+          // Enhanced structural validation - check if the entity exists with correct type
+          let structureMatch = false;
+          let foundEntityName = '';
           
-          if (cleanedChunkContent.length > 15) { // Only check substantial chunks
-            // Check if a reasonable amount of the chunk content is in the file
-            const contentWords = cleanedChunkContent.split(/\s+/);
-            const significantWords = contentWords.filter(word => word.length > 3);
-            
-            // Check what percentage of significant words appear in the file
-            let matchCount = 0;
-            for (const word of significantWords) {
-              if (actualContent.includes(word)) {
-                matchCount++;
-              }
-            }
-            
-            // Calculate match ratio
-            const matchRatio = significantWords.length > 0 ? 
-                              matchCount / significantWords.length : 0;
-            
-            console.log(`    - Word match ratio: ${matchRatio.toFixed(2)} (${matchCount}/${significantWords.length})`);
-            
-            // More lenient threshold - reduced from 0.5 to 0.4
-            if (significantWords.length > 0 && matchRatio < 0.4) {
-              chunksVerified = false;
-              console.log(`    - Below threshold, marked as unverified`);
+          // Different validation approaches based on chunk type
+          if (chunk.type === 'interface') {
+            // Validate interface exists
+            if (actualInterfaces.has(chunk.name)) {
+              structureMatch = true;
+              foundEntityName = chunk.name;
               
-              // Track which type of entities failed verification
-              if (chunk.type === 'interface' || chunk.type === 'type') {
-                interfacesVerified = false;
-                console.log(`    - Interface/type verification failed`);
-              } else if (chunk.type === 'react-component' || 
-                        (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) {
-                componentsVerified = false;
-                console.log(`    - Component verification failed`);
+              // Check properties if we have them in both places
+              if (chunk.metadata?.typeDefinition?.properties?.length > 0 && 
+                  actualInterfaces.get(chunk.name).childEntities?.length > 0) {
+                
+                const chunkProps = new Set(chunk.metadata.typeDefinition.properties.map(p => p.name));
+                const actualProps = new Set(actualInterfaces.get(chunk.name).childEntities.map(c => c.name));
+                
+                // Calculate property overlap percentage
+                const intersection = [...chunkProps].filter(x => actualProps.has(x));
+                const propMatchRatio = intersection.length / chunkProps.size;
+                
+                if (propMatchRatio < 0.5) {
+                  structureMatch = false;
+                  verificationDetails.structuralMismatches.push(
+                    `Interface ${chunk.name} has different properties (match ratio: ${propMatchRatio.toFixed(2)})`
+                  );
+                }
               }
             } else {
-              console.log(`    - Above threshold, marked as verified`);
+              // Try case-insensitive search or similar name search
+              const similarInterfaceNames = [...actualInterfaces.keys()].filter(
+                name => name.toLowerCase() === chunk.name.toLowerCase() || 
+                        name.replace(/Props$/, '') === chunk.name.replace(/Props$/, '') ||
+                        (name.includes(chunk.name) && name.length < chunk.name.length + 5)
+              );
+              
+              if (similarInterfaceNames.length > 0) {
+                structureMatch = true;
+                foundEntityName = similarInterfaceNames[0];
+                verificationDetails.structuralMismatches.push(
+                  `Interface name mismatch: found ${foundEntityName} instead of ${chunk.name}`
+                );
+              } else {
+                verificationDetails.missingEntities.push(
+                  `Interface ${chunk.name} not found in actual file`
+                );
+              }
+            }
+          } else if (chunk.type === 'type') {
+            // Validate type exists
+            if (actualTypes.has(chunk.name)) {
+              structureMatch = true;
+              foundEntityName = chunk.name;
+            } else {
+              // Similar approach for types
+              const similarTypeNames = [...actualTypes.keys()].filter(
+                name => name.toLowerCase() === chunk.name.toLowerCase() || 
+                        (name.includes(chunk.name) && name.length < chunk.name.length + 5)
+              );
+              
+              if (similarTypeNames.length > 0) {
+                structureMatch = true;
+                foundEntityName = similarTypeNames[0];
+                verificationDetails.structuralMismatches.push(
+                  `Type name mismatch: found ${foundEntityName} instead of ${chunk.name}`
+                );
+              } else {
+                verificationDetails.missingEntities.push(
+                  `Type ${chunk.name} not found in actual file`
+                );
+              }
+            }
+          } else if (chunk.type === 'react-component' || chunk.type === 'function') {
+            // Validate component/function exists
+            if (actualComponents.has(chunk.name)) {
+              structureMatch = true;
+              foundEntityName = chunk.name;
+              
+              // Check for method presence in components
+              if (chunk.metadata?.methods?.length > 0) {
+                const chunkMethods = new Set(chunk.metadata.methods);
+                const missingMethods = [...chunkMethods].filter(m => !actualMethods.has(m));
+                
+                if (missingMethods.length > 0) {
+                  verificationDetails.methodMismatches.push(
+                    `Component/function ${chunk.name} is missing methods: ${missingMethods.join(', ')}`
+                  );
+                }
+              }
+            } else {
+              // Try similar component names
+              const similarComponentNames = [...actualComponents.keys()].filter(
+                name => name.toLowerCase() === chunk.name.toLowerCase() || 
+                        (name.includes(chunk.name) && name.length < chunk.name.length + 5)
+              );
+              
+              if (similarComponentNames.length > 0) {
+                structureMatch = true;
+                foundEntityName = similarComponentNames[0];
+                verificationDetails.structuralMismatches.push(
+                  `Component/function name mismatch: found ${foundEntityName} instead of ${chunk.name}`
+                );
+              } else {
+                verificationDetails.missingEntities.push(
+                  `Component/function ${chunk.name} not found in actual file`
+                );
+              }
+            }
+          }
+          
+          // Fall back to content-based validation if structure check failed or for other types
+          if (!structureMatch || !['interface', 'type', 'react-component', 'function'].includes(chunk.type)) {
+            // Clean up chunk content for comparison (whitespace differences)
+            const cleanedChunkContent = chunk.content
+              .replace(/\s+/g, ' ')
+              .trim();
+            
+            if (cleanedChunkContent.length > 15) { // Only check substantial chunks
+              // Check if a reasonable amount of the chunk content is in the file
+              const contentWords = cleanedChunkContent.split(/\s+/);
+              const significantWords = contentWords.filter(word => word.length > 3);
+              
+              // Check what percentage of significant words appear in the file
+              let matchCount = 0;
+              for (const word of significantWords) {
+                if (actualContent.includes(word)) {
+                  matchCount++;
+                }
+              }
+              
+              // Calculate match ratio
+              const matchRatio = significantWords.length > 0 ? 
+                                matchCount / significantWords.length : 0;
+              
+              console.log(`    - Word match ratio: ${matchRatio.toFixed(2)} (${matchCount}/${significantWords.length})`);
+              
+              // More strict threshold for entities we claimed to find but failed structure check
+              const thresholdFailed = (structureMatch === false && matchRatio < 0.6) || 
+                                    (!structureMatch && matchRatio < 0.4);
+              
+              if (significantWords.length > 0 && thresholdFailed) {
+                chunksVerified = false;
+                console.log(`    - Below threshold, marked as unverified`);
+                
+                verificationDetails.implementationMismatches.push(
+                  `Content mismatch for ${chunk.type} ${chunk.name} (match ratio: ${matchRatio.toFixed(2)})`
+                );
+                
+                // Track which type of entities failed verification
+                if (chunk.type === 'interface' || chunk.type === 'type') {
+                  interfacesVerified = false;
+                  console.log(`    - Interface/type verification failed`);
+                } else if (chunk.type === 'react-component' || 
+                          (chunk.type === 'function' && /^[A-Z]/.test(chunk.name))) {
+                  componentsVerified = false;
+                  console.log(`    - Component verification failed`);
+                }
+              } else {
+                console.log(`    - Above threshold, marked as verified`);
+              }
+            } else {
+              console.log(`    - Chunk too small to verify reliably`);
             }
           } else {
-            console.log(`    - Chunk too small to verify reliably`);
+            console.log(`    - Structure verified: ${foundEntityName}`);
           }
         }
       }
-      // Log summary of validation
+      
+      // Log summary of validation with detailed failure information
       console.log(`- Validation summary for ${result.filePath}:`);
       console.log(`  - Content length matches: ${contentLengthMatches}`);
       console.log(`  - Chunks verified: ${chunksVerified}`);
       console.log(`  - Interfaces verified: ${hasInterfaces && interfacesVerified}`);
       console.log(`  - Components verified: ${hasComponents && componentsVerified}`);
+      
+      if (verificationDetails.missingEntities.length > 0) {
+        console.log(`  - Missing entities: ${verificationDetails.missingEntities.length}`);
+        verificationDetails.missingEntities.forEach(detail => console.log(`    - ${detail}`));
+      }
+      
+      if (verificationDetails.structuralMismatches.length > 0) {
+        console.log(`  - Structural mismatches: ${verificationDetails.structuralMismatches.length}`);
+        verificationDetails.structuralMismatches.forEach(detail => console.log(`    - ${detail}`));
+      }
       
       // More lenient verification approach - if file exists, mark as at least partially valid
       // This helps prevent overly aggressive filtering
@@ -201,7 +386,9 @@ export function validateSearchResultContent(results: SearchResult[]): SearchResu
           fileExists: true,
           contentMatches: contentMatchesResult,
           interfacesVerified: interfacesVerifiedResult,
-          componentsVerified: componentsVerifiedResult
+          componentsVerified: componentsVerifiedResult,
+          lastModified,
+          verificationDetails // Add detailed verification information
         }
       };
     } catch (error) {
@@ -215,7 +402,8 @@ export function validateSearchResultContent(results: SearchResult[]): SearchResu
           fileExists: true,
           contentMatches: true, // Assume content matches to avoid filtering out potentially useful results
           interfacesVerified: true,
-          componentsVerified: true
+          componentsVerified: true,
+          lastModified: fs.statSync(result.filePath).mtime.getTime()
         }
       };
     }
@@ -319,9 +507,9 @@ export function identifyHallucinations(results: SearchResult[]): Set<number> {
       }
     }
     
-    // Potential hallucination - extremely low confidence score
-    // Increased threshold from 0.1 to allow more results to pass through
-    if (result.confidenceScore !== undefined && result.confidenceScore < 0.05) {
+    // Potential hallucination - low confidence score
+    // Increased threshold from 0.05 to 0.6 to strictly filter out hallucinations
+    if (result.confidenceScore !== undefined && result.confidenceScore < 0.6) {
       hallucinations.add(index);
       return;
     }

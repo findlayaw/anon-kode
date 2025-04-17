@@ -8,6 +8,7 @@ import { SearchResult } from './searchUtils'
 
 /**
  * Format search results for display with confidence indicators
+ * and improved structural verification details
  * 
  * @param results Search results to format
  * @returns String representation of the search results
@@ -26,10 +27,20 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
   const verifiedResults = results.filter(result => result.isVerified);
   const invalidResults = verifiedResults.filter(result => !result.verified?.fileExists);
   
-  // Provide a summary of verification results
+  // Calculate verification statistics
+  const structuralMismatchResults = verifiedResults.filter(
+    result => result.verified?.verificationDetails?.structuralMismatches?.length > 0
+  );
+  const implementationMismatchResults = verifiedResults.filter(
+    result => result.verified?.verificationDetails?.implementationMismatches?.length > 0
+  );
+  
+  // Provide a more detailed summary of verification results
   if (verifiedResults.length > 0) {
     if (invalidResults.length > 0) {
       output += `WARNING: ${invalidResults.length} of ${results.length} results could not be verified to exist in the codebase.\n\n`;
+    } else if (structuralMismatchResults.length > 0 || implementationMismatchResults.length > 0) {
+      output += `NOTE: ${structuralMismatchResults.length + implementationMismatchResults.length} of ${results.length} results have structural or implementation differences from the actual code.\n\n`;
     } else {
       output += `All results verified against the actual code files.\n\n`;
     }
@@ -65,7 +76,37 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
     // Use formatted display path if available
     const displayPath = result.formattedDisplayPath || result.filePath
     
-    output += `Path: ${displayPath}\n`
+    // Add confidence score display when available
+    const confidenceDisplay = result.confidenceScore !== undefined ? 
+      ` [Confidence: ${(result.confidenceScore * 100).toFixed(0)}%]` : '';
+    
+    output += `Path: ${displayPath}${confidenceDisplay}\n`
+    
+    // Show verification status indicators
+    if (result.isVerified) {
+      if (!result.verified?.fileExists) {
+        output += `⚠️ WARNING: This file was not found in the codebase. The content shown may be incorrect.\n`;
+      } else if (result.verified?.verificationDetails) {
+        const details = result.verified.verificationDetails;
+        
+        // Show structural mismatch warnings
+        if (details.structuralMismatches?.length > 0) {
+          output += `ℹ️ NOTE: Minor structural differences detected in the actual implementation:\n`;
+          details.structuralMismatches.slice(0, 2).forEach(detail => {
+            output += `   - ${detail}\n`;
+          });
+          if (details.structuralMismatches.length > 2) {
+            output += `   - ... and ${details.structuralMismatches.length - 2} more differences\n`;
+          }
+        }
+        
+        // Show file modification time if available
+        if (result.verified.lastModified) {
+          const modifiedDate = new Date(result.verified.lastModified);
+          output += `Last modified: ${modifiedDate.toISOString().split('T')[0]}\n`;
+        }
+      }
+    }
     
     // Add confidence indicator if available (only for non-exact matches)
     if (result.confidenceScore !== undefined && result.matchType !== 'exact') {
@@ -174,6 +215,18 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
           }
         }
         
+        // Show implementation verification warning if necessary
+        if (result.verified?.verificationDetails?.implementationMismatches) {
+          const mismatches = result.verified.verificationDetails.implementationMismatches.filter(
+            mismatch => mismatch.includes(`${chunk.type} ${chunk.name}`)
+          );
+          
+          if (mismatches.length > 0) {
+            output += "\n⚠️ **Implementation Notice**: The actual implementation may differ from what is shown. ";
+            output += "There may be updated methods, different parameter orders, or additional functionality.\n";
+          }
+        }
+        
         output += "\n\n"
       })
     } else {
@@ -209,11 +262,27 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
     if (interfaces.length > 0 && components.length > 0) {
       let foundRelationships = false
       
-      // Check for Props interfaces and matching components
+      // Check for Props interfaces and matching components with improved fuzzy matching
       interfaces.forEach(propsInterface => {
         if (propsInterface.name.endsWith('Props') || propsInterface.name.includes('Props')) {
-          const componentName = propsInterface.name.replace(/Props$/, '')
-          const matchingComponent = components.find(comp => comp.name === componentName)
+          // Try different component name variations for better matching
+          const possibleComponentNames = [
+            propsInterface.name.replace(/Props$/, ''),
+            propsInterface.name.replace(/Props/, ''),
+            propsInterface.name.replace(/^(.+)Props$/, '$1'),
+            propsInterface.name.replace(/^(.+)ComponentProps$/, '$1')
+          ];
+          
+          // Find any matching component
+          const matchingComponent = components.find(comp => 
+            possibleComponentNames.some(name => 
+              comp.name === name || 
+              // Case insensitive comparison as fallback
+              (comp.name.toLowerCase() === name.toLowerCase()) ||
+              // Prefix/suffix comparison
+              (comp.name.includes(name) && name.length > 3)
+            )
+          );
           
           if (matchingComponent) {
             if (!foundRelationships) {
@@ -226,17 +295,29 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
         }
       })
       
-      // Check for Form components and their data structures
+      // Check for Form components and their data structures with improved matching
       interfaces.forEach(dataInterface => {
-        if (dataInterface.name.endsWith('Data') || 
-            (dataInterface.name.includes('Form') && dataInterface.name.includes('Data'))) {
+        const isDataInterface = dataInterface.name.endsWith('Data') || 
+                              (dataInterface.name.includes('Form') && dataInterface.name.includes('Data')) ||
+                              dataInterface.name.endsWith('FormData');
+        
+        if (isDataInterface) {
+          // Try different form name variations for better matching
+          const possibleFormNames = [
+            dataInterface.name.replace(/Data$/, ''),
+            dataInterface.name.replace(/FormData$/, 'Form'),
+            dataInterface.name.replace(/FormData$/, ''),
+            dataInterface.name.replace(/Data$/, 'Form')
+          ];
           
-          // Look for matching form components
-          const formName = dataInterface.name.replace(/Data$/, '')
+          // Find any matching form component
           const matchingForm = components.find(comp => 
-            comp.name === formName || 
-            comp.name === `${formName}Form`
-          )
+            possibleFormNames.some(name => 
+              comp.name === name || 
+              comp.name === `${name}Form` ||
+              comp.name.endsWith('Form') && comp.name.includes(name)
+            )
+          );
           
           if (matchingForm) {
             if (!foundRelationships) {
@@ -248,6 +329,34 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
           }
         }
       })
+      
+      // Enhanced parent-child component relationships
+      const parentChildComponents = new Map<string, string[]>();
+      
+      components.forEach(component => {
+        if (component.metadata?.relationshipContext?.usedComponents) {
+          component.metadata.relationshipContext.usedComponents.forEach(usedComp => {
+            // Check if the used component is in our components list
+            const matchingChild = components.find(c => c.name === usedComp);
+            if (matchingChild) {
+              if (!parentChildComponents.has(component.name)) {
+                parentChildComponents.set(component.name, []);
+              }
+              parentChildComponents.get(component.name)?.push(usedComp);
+            }
+          });
+        }
+      });
+      
+      if (parentChildComponents.size > 0) {
+        output += "\n**Component Composition:**\n\n";
+        
+        parentChildComponents.forEach((children, parent) => {
+          output += `- \`${parent}\` uses: ${children.map(c => `\`${c}\``).join(', ')}\n`;
+        });
+        
+        output += "\n";
+      }
       
       if (foundRelationships) {
         output += "\n"
@@ -295,17 +404,29 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
           .slice(-2)
           .join('/')
         
-        // Check if importing file imports from exporting file
+        // Enhanced import detection with fuzzy matching
         if (imports.some(imp => 
           imp.includes(shortExportingPath) || 
-          imp.includes(exportingFileName.replace(/\.[^.]+$/, ''))
+          imp.includes(exportingFileName.replace(/\.[^.]+$/, '')) ||
+          // Add common variations of import paths
+          imp.includes(exportingFileName.replace(/\.[^.]+$/, '').toLowerCase()) ||
+          imp.includes(path.dirname(exportingFile).split('/').pop() || '')
         )) {
           if (!foundImportRelationships) {
             output += "**File Import/Export Relationships:**\n\n"
             foundImportRelationships = true
           }
           
-          output += `- \`${importingFileName}\` imports from \`${exportingFileName}\`\n`
+          // Show what's being imported
+          const sharedExports = exports.filter(exp => 
+            imports.some(imp => imp.includes(exp))
+          );
+          
+          if (sharedExports.length > 0) {
+            output += `- \`${importingFileName}\` imports ${sharedExports.map(e => `\`${e}\``).join(', ')} from \`${exportingFileName}\`\n`;
+          } else {
+            output += `- \`${importingFileName}\` imports from \`${exportingFileName}\`\n`;
+          }
         }
       })
     })
@@ -313,6 +434,70 @@ export function formatEnhancedSearchResults(results: SearchResult[]): string {
     if (foundImportRelationships) {
       output += "\n"
     }
+    
+    // Add a usage flowchart for key components
+    if (components.length > 1) {
+      const usageMap = new Map<string, string[]>();
+      const usedByMap = new Map<string, string[]>();
+      
+      // Build usage maps
+      components.forEach(component => {
+        if (component.metadata?.relationshipContext?.usedComponents) {
+          usageMap.set(component.name, component.metadata.relationshipContext.usedComponents);
+          
+          // Populate the usedBy map
+          component.metadata.relationshipContext.usedComponents.forEach(used => {
+            if (!usedByMap.has(used)) {
+              usedByMap.set(used, []);
+            }
+            usedByMap.get(used)?.push(component.name);
+          });
+        }
+      });
+      
+      // Find entry point components (used by many, use few)
+      const entryPoints = components.filter(comp => 
+        (usedByMap.get(comp.name)?.length || 0) > 1 && 
+        (usageMap.get(comp.name)?.length || 0) < 2
+      ).map(comp => comp.name);
+      
+      if (entryPoints.length > 0) {
+        output += "**Key Component Flow:**\n\n";
+        entryPoints.forEach(entryPoint => {
+          output += `- \`${entryPoint}\` → may be a central component in this workflow\n`;
+        });
+        output += "\n";
+      }
+    }
+  }
+  
+  // Add a verification summary footer
+  if (verifiedResults.length > 0) {
+    output += "\n## Verification Summary\n\n";
+    
+    const verifiedOk = verifiedResults.filter(r => 
+      r.verified?.fileExists && 
+      r.verified?.contentMatches && 
+      !r.verified?.verificationDetails?.structuralMismatches?.length &&
+      !r.verified?.verificationDetails?.implementationMismatches?.length
+    ).length;
+    
+    output += `- ${verifiedOk} of ${results.length} results fully verified as accurate\n`;
+    
+    if (structuralMismatchResults.length > 0) {
+      output += `- ${structuralMismatchResults.length} results have structural differences (entity names or properties)\n`;
+    }
+    
+    if (implementationMismatchResults.length > 0) {
+      output += `- ${implementationMismatchResults.length} results have implementation differences\n`;
+    }
+    
+    if (invalidResults.length > 0) {
+      output += `- ${invalidResults.length} referenced files not found in the codebase\n`;
+    }
+    
+    // Add a timestamp to help identify when verification occurred
+    output += `\nVerification timestamp: ${new Date().toISOString()}\n`;
   }
   
   return output

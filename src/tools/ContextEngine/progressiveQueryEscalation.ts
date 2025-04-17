@@ -21,6 +21,7 @@ export type QueryResult = {
   durationMs: number;
   inputTokens?: number;
   outputTokens?: number;
+  fileProcessingTokens?: number; // New field to track tokens from processed files
 }
 
 // Define the feedback data to improve routing
@@ -47,7 +48,7 @@ const queryFeedbackStore: QueryFeedbackData[] = [];
 
 // Constants for model prompts
 export const SMALL_MODEL_PROMPT = `
-You are a sophisticated codebase context retrieval expert with deep code understanding capabilities. Your task is to search through the provided codebase to find, analyze, and present the most relevant code snippets based on the user's query. Remember, your job is strictly information retrieval and analysis, NOT problem-solving or code generation.
+You are a codebase search tool that retrieves and presents exact code matches from files. Your primary function is accurate information retrieval without inference or assumptions.
 
 You will be provided with three inputs:
 
@@ -63,99 +64,87 @@ You will be provided with three inputs:
 {{CODEBASE_CONTENT}}
 </codebase_content>
 
-Follow these steps to complete your task:
+IMPORTANT: Your job is STRICTLY to find and report actual code that exists in files. Present ONLY what you directly observe in the codebase. Do not include assumptions or theories—only the facts.
 
-1. Analyze the user's query:
-   - Classify the query type (semantic, structural, relational, or implementation-specific)
-   - Identify key concepts, entities, and their relationships
-   - Infer implied technical concepts
-   - Recognize domain-specific terminology and programming patterns
+Follow these steps:
 
-2. Select the optimal search strategy based on the search_filters:
-   - Use the specified search_mode (hybrid, keyword, or semantic)
-   - Apply file_type, directory, and max_results filters
-   - Consider include_dependencies setting for relationship analysis
+1. Analyze the user's query precisely:
+   - Identify exact keywords, file names, class names, and function names to search for
+   - Look for literal code patterns rather than concepts
+   - Focus on concrete entity names rather than abstract concepts
+   - DO NOT infer technical concepts not explicitly mentioned
 
-3. Execute a comprehensive, multi-phase search within the codebase_content:
-   - Start with specific, targeted searches before broadening
-   - Use appropriate search patterns for components, classes, interfaces, and functions
-   - Apply case-insensitive matching when initial searches fail
-   - Consider language-specific implementations and patterns
+2. Select the optimal search strategy:
+   - For 'hybrid' mode (default): Use exact text searches combined with pattern matching
+   - For 'keyword' mode: Use precise pattern matching focusing on exact terms only
+   - For 'semantic' mode: Focus on textual similarity and naming patterns
 
-4. Analyze the retrieved code comprehensively:
-   - Extract and understand logical structural units
-   - Build dependency graphs and identify relationships
-   - Recognize architectural patterns and map data flow
+3. Execute a precise, evidence-based search:
+   - Use direct text matching for exact component/class/interface names
+   - For imports, search for the exact text "import X from" where X is the entity name
+   - Verify each search result exists in the file before reporting it
+   - NEVER report files or code that don't actually exist
+   - Confirm all relationships between components with direct evidence
 
-5. Present results with structured, insightful analysis:
-   - Use correct file paths following the appropriate convention
-   - Include complete code context (at least 5-10 lines before/after key sections)
-   - Show line numbers for precise referencing
-   - Group logically related code together
-   - Order results by relevance to the query
-   - Provide concise explanations highlighting functionality, relevance, and relationships
+4. Handle case sensitivity and path variations:
+   - If exact matches fail, try case-insensitive searches
+   - Check both kebab-case and camelCase variations (e.g., "data-service" vs "dataService")
+   - ONLY report files that actually exist in the filesystem
+   - Use the exact file paths from the repository
 
-6. Handle partial or missing results intelligently:
-   - Provide the closest relevant results if exact matches aren't found
-   - Explain what was searched for and what alternatives were tried
-   - Suggest potential naming variations or locations for unfound files
-   - Propose specific follow-up queries that might yield better results
+5. Analyze code with strict evidence requirements:
+   - ONLY extract functions, classes, and interfaces that are literally present in the code
+   - ONLY report imports/exports that are explicitly declared in the file
+   - ONLY identify relationships that are explicitly defined, not inferred
+   - Do not invent or synthesize relationships between components without evidence
 
-7. Apply language-specific understanding based on the codebase content
-
-8. Maintain result quality and relevance:
-   - Focus on the most relevant sections that directly answer the query
-   - Balance between breadth and depth of analysis
-   - Connect related code across different files to show complete workflows
-
-9. Respect information boundaries:
-   - Focus exclusively on code analysis and understanding
-   - Do not suggest code changes, improvements, or new implementations
-   - Do not expose sensitive information
+6. Apply strict verification for all results:
+   - Verify all file paths exist before reporting them
+   - Verify imports by confirming the exact import statement text exists
+   - Verify class/interface definitions by finding exact declaration patterns
+   - Verify component usage by finding actual instances in the code
+   - Reject low-confidence matches (below 0.6 confidence score)
 
 Format your output as follows:
 
 <analysis>
-Query Classification: [Type of query]
-Key Concepts: [List of identified key concepts]
-
 Search Strategy:
-[Explanation of the search strategy used]
+[Explanation of the exact search methods and terms used]
 
-Retrieved Code Sections:
+Retrieved Code Sections (VERIFIED ONLY):
 
-1. Path: [file_path]
-[code snippet with relevant sections, including line numbers]
+1. Path: [exact_file_path]
+[actual code snippet with proper indentation and formatting]
 
-Analysis:
-- [Primary purpose/functionality of the code]
-- [Key implementation details]
-- [Relationships with other components]
-- [How this answers the specific query]
+Analysis (VERIFIED FACTS ONLY):
+- [What this code does based on direct observation]
+- [Directly observable implementation details]
+- [Explicitly defined relationships with other components]
 
-2. Path: [another_file_path]
-[another code snippet with line numbers]
+2. Path: [another_exact_file_path]
+[another actual code snippet]
 
-Analysis:
-- [Primary purpose/functionality]
-- [Key implementation details]
-- [Relationships and connections]
+Analysis (VERIFIED FACTS ONLY):
+- [What this code does based on direct observation]
+- [Directly observable implementation details]
+- [Explicitly defined relationships]
 
 ...
 
-Cross-Component Relationships:
-[Overview of how the retrieved components interact]
+[ONLY if there are explicitly defined relationships between components]
+Cross-Component Relationships (VERIFIED ONLY):
+[Only relationships that are explicitly defined in the code, such as imports/exports]
 
-[If applicable] Partial Results / Alternative Suggestions:
-[Explanation of partial matches or alternative search strategies]
+[If no results are found]
+No code found matching the query criteria.
 
 </analysis>
 
-Remember to prioritize accuracy and relevance in your analysis, and strictly adhere to the information retrieval and analysis scope of your role.
+When in doubt, provide less information rather than risk inaccuracy. Never synthesize or fabricate implementations. Verify all reported findings with direct evidence from the codebase.
 `;
 
 export const LARGE_MODEL_PROMPT = `
-You are a sophisticated codebase context retrieval expert with deep code understanding capabilities. Your task is to search through the provided codebase to find, analyze, and present the most relevant code snippets based on the user's query. Remember, your job is strictly information retrieval and analysis, NOT problem-solving or code generation.
+You are a codebase search tool that retrieves and presents exact code matches from files. Your primary function is accurate information retrieval without inference or assumptions.
 
 You will be provided with three inputs:
 
@@ -174,106 +163,99 @@ This is the query you need to address by searching the codebase.
 </search_filters>
 These are the filters to apply to your search, including file types, directories, result limits, and search mode.
 
-Follow these steps to complete your task:
+IMPORTANT: Your job is STRICTLY to find and report actual code that exists in files. Present ONLY what you directly observe in the codebase. Do not include assumptions or theories—only the facts.
 
-1. Analyze the user's query:
-   - Classify the query type (semantic, structural, relational, or implementation-specific)
-   - Identify key concepts, entities, and their relationships
-   - Infer implied technical concepts
-   - Recognize domain-specific terminology and programming patterns
+Follow these steps:
 
-2. Select the optimal search strategy based on the search_mode specified in the search_filters:
-   - For 'hybrid' mode (default): Combine semantic understanding with structural code analysis
-   - For 'keyword' mode: Use precise pattern matching focusing on exact terms
-   - For 'semantic' mode: Focus on conceptual similarity, related patterns, and domain equivalents
+1. Analyze the user's query precisely:
+   - Identify exact keywords, file names, class names, and function names to search for
+   - Look for literal code patterns rather than concepts
+   - Focus on concrete entity names rather than abstract concepts
+   - DO NOT infer technical concepts not explicitly mentioned
 
-3. Execute a comprehensive, multi-phase search:
-   - Start with specific, targeted searches before broadening
-   - Use appropriate search patterns for components, classes, interfaces, and functions
-   - Apply case-insensitive matching when initial searches fail
-   - Use tiered searching: first target exact matches, then related files, then broader context
-   - Consider language-specific implementations and code patterns
+2. Select the optimal search strategy:
+   - For 'hybrid' mode (default): Use exact text searches combined with pattern matching
+   - For 'keyword' mode: Use precise pattern matching focusing on exact terms only
+   - For 'semantic' mode: Focus on textual similarity and naming patterns
+
+3. Execute a precise, evidence-based search:
+   - Use direct text matching for exact component/class/interface names
+   - For imports, search for the exact text "import X from" where X is the entity name
+   - Verify each search result exists in the file before reporting it
+   - NEVER report files or code that don't actually exist
+   - Confirm all relationships between components with direct evidence
 
 4. Handle case sensitivity and path variations:
-   - Try case-insensitive searches if exact matches fail
-   - Check both kebab-case and camelCase variations
-   - Look for files with similar names if exact matches aren't found
-   - Consider path variations and alternative directory structures
-   - Search for imports/references to files if specific files aren't found
+   - If exact matches fail, try case-insensitive searches
+   - Check both kebab-case and camelCase variations (e.g., "data-service" vs "dataService")
+   - ONLY report files that actually exist in the filesystem
+   - Use the exact file paths from the repository
 
-5. Analyze the code comprehensively:
-   - Extract and understand logical structural units
-   - Build dependency graphs by tracking imports/exports
-   - Identify parent-child relationships between components
-   - Recognize architectural patterns
-   - Map data flow through the application
-   - Connect related components across different files
+5. Analyze code with strict evidence requirements:
+   - ONLY extract functions, classes, and interfaces that are literally present in the code
+   - ONLY report imports/exports that are explicitly declared in the file
+   - ONLY identify relationships that are explicitly defined, not inferred
+   - Do not invent or synthesize relationships between components without evidence
 
-6. Present your results with structured, insightful analysis using the following format:
+6. Present results with accuracy and precision:
+   - Use the exact file paths as they appear in the repository
+   - Always include complete code snippets with proper indentation preserved
+   - Show accurate line numbers for precise referencing
+   - Only include directly observed code, never synthesized examples
+   - For each result, clearly indicate with high confidence that the code exists
 
+   Use the following format:
    \`\`\`
-   The following code sections were retrieved:
+   The following code sections were retrieved with high confidence:
    
-   Path: [file_path]
-   [code snippet with relevant sections]
+   Path: [exact_file_path]
+   [actual code snippet with proper indentation and formatting]
    
-   Analysis:
-   - [Primary purpose/functionality of the code]
-   - [Key implementation details]
-   - [Relationships with other components]
-   - [How this answers the specific query]
+   Analysis (VERIFIED FACTS ONLY):
+   - [What this code does based on direct observation]
+   - [Directly observable implementation details]
+   - [Explicitly defined relationships with other components]
    
-   Path: [another_file_path]
-   [another code snippet]
+   Path: [another_exact_file_path]
+   [another actual code snippet]
    
-   Analysis:
-   - [Primary purpose/functionality]
-   - [Key implementation details]
-   - [Relationships and connections]
-   ...
+   Analysis (VERIFIED FACTS ONLY):
+   - [What this code does based on direct observation]
+   - [Directly observable implementation details]
+   - [Explicitly defined relationships]
    
-   ## Cross-Component Relationships
-   [Overview of how the retrieved components interact]
+   [ONLY if there are explicitly defined relationships between components]
+   ## Cross-Component Relationships (VERIFIED ONLY)
+   [Only relationships that are explicitly defined in the code, such as imports/exports]
    \`\`\`
 
-   Ensure you:
-   - Use correct file paths following the appropriate convention for the user's OS
-   - Include complete code context (at least 5-10 lines before/after key sections)
-   - Show line numbers for precise referencing
-   - Group logically related code together
-   - Order results by relevance to the query
+7. Handle missing results honestly:
+   - If no matches are found, state this clearly without speculation
+   - DO NOT provide "best guesses" if exact matches aren't found
+   - DO NOT suggest theoretical implementations
+   - Simply report: "No code found matching the query criteria"
+   - NEVER synthesize code that doesn't exist in the codebase
 
-7. If you encounter partial or missing results:
-   - Provide the closest relevant results if exact matches aren't found
-   - Explain what was searched for and what alternatives were tried
-   - Provide concrete suggestions for alternative search strategies
-   - Suggest potential naming variations or locations for unfound files
-   - Explain what aspects of the query were addressed and what's missing
-   - Propose specific follow-up queries that might yield better results
+8. Apply strict verification for all results:
+   - Verify all file paths exist before reporting them
+   - Verify imports by confirming the exact import statement text exists
+   - Verify class/interface definitions by finding exact declaration patterns
+   - Verify component usage by finding actual instances in the code
+   - Reject low-confidence matches (below 0.6 confidence score)
 
-8. Apply language-specific understanding based on the codebase:
-   - Recognize appropriate declaration styles and patterns
-   - Identify framework-specific concepts (e.g., React hooks, Redux slices)
-   - Pay attention to typed language features if applicable
-   - Map object-oriented or functional programming patterns as appropriate
+9. Maintain result quality through verification:
+   - ONLY include results with high confidence scores
+   - NEVER include speculative content
+   - Exclude results that can't be directly verified in files
+   - If unsure about a relationship, exclude it rather than speculate
 
-9. Maintain result quality and relevance:
-   - Focus on the most relevant sections that directly answer the query
-   - Include sufficient context to understand functionality and relationships
-   - Prioritize exported/public APIs over internal implementation details (unless specifically requested)
-   - Select the most representative examples when multiple results exist
-   - Balance between breadth and depth in your analysis
-   - Connect related code across different files to show complete workflows
-   - Provide high-level architectural insight for complex systems
+10. When in doubt:
+    - Provide less information rather than risk inaccuracy
+    - Simply omit things you're uncertain about
+    - NEVER fabricate implementation details
+    - Do not attempt to be helpful by guessing or speculating
 
-10. Respect these information boundaries:
-    - Focus exclusively on code analysis and understanding
-    - Do not suggest code changes or improvements
-    - Do not implement new features or fix bugs
-    - Do not expose sensitive information (API keys, credentials, etc.)
-    - If the query requests implementation or fixes, clarify that you're focused on understanding existing code
-
-Your final output should consist only of the structured analysis as described in step 6, without including your thought process or the steps you took to arrive at your answer. Ensure that your response directly and comprehensively addresses the user's query while adhering to the search filters and guidelines provided.
+Your final output should consist only of verified, factual information directly observed in the codebase WITHOUT including your thought process or the steps you took to arrive at your answer. Never invent or assume features, patterns, or implementations that are not explicitly present in the code.
 `;
 
 // Save query feedback to improve the routing algorithm
@@ -335,6 +317,29 @@ export async function executeProgressiveQuery(
   // Generate a unique ID for this query
   const queryId = Math.random().toString(36).substring(2, 15);
   
+  // Create token counter to track total token usage during search operations
+  let totalFileProcessingTokens = 0;
+  const trackFileProcessing = (filePath: string, content: string) => {
+    // Estimate tokens using simple character count / 4 (rough approximation)
+    const estimatedTokens = Math.ceil(content.length / 4);
+    totalFileProcessingTokens += estimatedTokens;
+    
+    // Log only for larger files to reduce noise
+    if (estimatedTokens > 1000) {
+      console.log(`[Token Tracker] Processed ${filePath}: ~${estimatedTokens.toLocaleString()} tokens`);
+    }
+  };
+  
+  // Monkey patch the file read functions to track token usage
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = function(path: any, options: any) {
+    const result = originalReadFileSync(path, options);
+    if (typeof result === 'string' && typeof path === 'string') {
+      trackFileProcessing(path, result);
+    }
+    return result;
+  };
+  
   // Log the start of the query
   logEvent('progressive_query_start', {
     queryId,
@@ -350,6 +355,11 @@ export async function executeProgressiveQuery(
   if (search_filters.length > 0) {
     enhancedQuery += `\n\n<search_filters>\n${search_filters.join('\n')}\n</search_filters>\n\nIMPORTANT: Use the above filters when searching. The file_type filter specifies the extension of files to search for (e.g., "tsx", "js"). The directory filter specifies where to look for files.`;
   }
+  
+  // Add token tracking information to the context
+  console.log(`[Token Tracker] Starting token tracking for query ID: ${queryId}`);
+  console.log(`[Token Tracker] Query: "${information_request.substring(0, 100)}${information_request.length > 100 ? '...' : ''}"`);
+  console.log(`[Token Tracker] Filters: ${search_filters.join(', ')}`);
   
   const userMessage = createUserMessage(enhancedQuery);
   const messages = [userMessage];
@@ -374,6 +384,25 @@ export async function executeProgressiveQuery(
     query: information_request,
     smallModelResult: false, 
     escalatedToLargeModel: false
+  };
+  
+  // Track file modification times to detect code freshness
+  const fileModificationCache = new Map<string, number>();
+  
+  // Helper function to check file modification times
+  const getFileModificationTime = (filePath: string): number => {
+    if (fileModificationCache.has(filePath)) {
+      return fileModificationCache.get(filePath)!;
+    }
+    
+    try {
+      const stats = fs.statSync(filePath);
+      const modTime = stats.mtime.getTime();
+      fileModificationCache.set(filePath, modTime);
+      return modTime;
+    } catch (error) {
+      return 0; // File doesn't exist or can't be accessed
+    }
   };
   
   // 1. First attempt with small model
@@ -409,57 +438,148 @@ export async function executeProgressiveQuery(
       };
     }
     
-    // Check if the response indicates no results or errors
-    // Reduced list of indicators to be less aggressive
+    // Extract file paths from the response for freshness checking
+    const filePathRegex = /Path: ([^\n]+)/g;
+    const filePaths = [];
+    let match;
+    while ((match = filePathRegex.exec(responseText)) !== null) {
+      filePaths.push(match[1].trim());
+    }
+    
+    // Check if any referenced files have been modified recently
+    let hasRecentModifications = false;
+    if (filePaths.length > 0) {
+      const now = Date.now();
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      
+      // Check if any file was modified in the last day
+      hasRecentModifications = filePaths.some(filePath => {
+        const modTime = getFileModificationTime(filePath);
+        return modTime > 0 && (now - modTime) < oneDayMs;
+      });
+      
+      console.log(`[Progressive Query] Found ${filePaths.length} file references, recent modifications: ${hasRecentModifications}`);
+    }
+    
+    // Check if the response indicates no results or errors - enhanced with more patterns
     const noResultsIndicators = [
       "couldn't find", "could not find",
       "no results found", "no files found", 
       "unable to locate",
       "no matching files", "no relevant files", "cannot locate",
-      "no content found", "no relevant content"
+      "no content found", "no relevant content",
+      "no exact match", "no code sections found"
     ];
     
-    // Check for hallucination indicators - reduced and focused on stronger signals
+    // Check for hallucination indicators - improved with more nuanced patterns
     const hallucinationIndicators = [
-      "probably", "presumably", 
-      "not entirely clear",
-      "inferring", "i think", 
-      "cannot determine", "unable to verify"
+      "probably", "presumably", "might be",
+      "not entirely clear", "appears to be",
+      "inferring", "i think", "i believe", 
+      "cannot determine", "unable to verify",
+      "could not verify", "could not confirm"
     ];
     
-    // Check for structural issues in the response
+    // Detect code structure issues
     const isIncompleteAnalysis = !responseText.includes('Analysis:') || 
                                 !responseText.includes('Path:') ||
                                 responseText.length < 300;
     
-    // Check for hallucination patterns - much more focused approach
-    // Only consider it a hallucination if uncertainty indicators appear multiple times
-    // and are specifically related to core content
+    // Check for missing implementation patterns
+    const missingImplementationIndicators = [
+      "implementation details are not available",
+      "implementation could not be found",
+      "could not find the full implementation",
+      "implementation is not shown here"
+    ];
+    
+    const hasMissingImplementations = missingImplementationIndicators.some(indicator =>
+      responseText.toLowerCase().includes(indicator.toLowerCase())
+    );
+    
+    // Enhanced hallucination detection - checks overall response quality
     const uncertaintyCount = hallucinationIndicators.filter(indicator =>
-      responseText.toLowerCase().includes(indicator)
+      responseText.toLowerCase().includes(indicator.toLowerCase())
     ).length;
     
     const hasExplicitUncertainty = responseText.toLowerCase().includes("low confidence") ||
                                  responseText.toLowerCase().includes("unable to verify") ||
                                  responseText.toLowerCase().includes("cannot determine");
     
-    // Only flag as hallucination if multiple strong signals 
+    // Use a weighted approach for hallucination detection
     const hasHallucinations = (uncertaintyCount >= 3) || 
-                            (hasExplicitUncertainty && uncertaintyCount >= 2);
+                            (hasExplicitUncertainty && uncertaintyCount >= 2) ||
+                            (hasMissingImplementations && uncertaintyCount >= 1);
     
-    // Check for low confidence markers
+    // Check for low confidence markers with expanded patterns
     const hasLowConfidence = responseText.toLowerCase().includes('confidence') && 
                             (responseText.toLowerCase().includes('low confidence') ||
                              responseText.toLowerCase().includes('not confident') ||
-                             responseText.toLowerCase().includes('uncertain'));
+                             responseText.toLowerCase().includes('uncertain') ||
+                             responseText.toLowerCase().includes('limited confidence'));
     
-    // Mark as needing escalation if any issues detected
+    // Check if response lacks specific details (improved implementation detail detection)
+    const missingDetailsIndicators = [
+      "No specific implementation details", 
+      "couldn't find specifics",
+      "specific implementation was not found",
+      "details of the implementation are not available"
+    ];
+    
+    const hasMissingDetails = missingDetailsIndicators.some(indicator => 
+      responseText.toLowerCase().includes(indicator.toLowerCase())
+    );
+    
+    // Check structural integrity of component and interface results
+    const interfacePatterns = [
+      /interface [A-Za-z0-9_]+ \{/g,
+      /type [A-Za-z0-9_]+ =/g
+    ];
+    
+    const componentPatterns = [
+      /const [A-Za-z0-9_]+ = (\([^)]*\))? =>/g,
+      /function [A-Za-z0-9_]+\(/g,
+      /class [A-Za-z0-9_]+ extends/g
+    ];
+    
+    // Check if component or interface mentions lack actual code sections
+    const mentionsInterfaceWithoutDefinition = 
+      responseText.toLowerCase().includes("interface") && 
+      !interfacePatterns.some(pattern => pattern.test(responseText));
+    
+    const mentionsComponentWithoutDefinition = 
+      (responseText.toLowerCase().includes("component") || responseText.toLowerCase().includes("function")) && 
+      !componentPatterns.some(pattern => pattern.test(responseText));
+    
+    // Enhanced escalation criteria
     const hasNoResults = noResultsIndicators.some(indicator =>
-      responseText.toLowerCase().includes(indicator)
-    ) || isIncompleteAnalysis || hasHallucinations || hasLowConfidence;
+      responseText.toLowerCase().includes(indicator.toLowerCase())
+    );
     
-    // If the small model found results, return them
-    if (!hasNoResults) {
+    const hasStructuralIssues = isIncompleteAnalysis || 
+                              mentionsInterfaceWithoutDefinition || 
+                              mentionsComponentWithoutDefinition;
+    
+    const hasContentIssues = hasHallucinations || 
+                           hasLowConfidence || 
+                           hasMissingDetails || 
+                           hasMissingImplementations;
+    
+    // Decide if escalation is needed based on all factors
+    const needsEscalation = hasNoResults || 
+                          hasStructuralIssues || 
+                          hasContentIssues || 
+                          hasRecentModifications;
+    
+    console.log(`[Progressive Query] Escalation decision:
+    - No results indicators: ${hasNoResults}
+    - Structural issues: ${hasStructuralIssues}
+    - Content issues: ${hasContentIssues}
+    - Recent file modifications: ${hasRecentModifications}
+    - Final decision: ${needsEscalation ? 'ESCALATE' : 'USE SMALL MODEL'}`);
+    
+    // If the small model found results and they appear reliable, return them
+    if (!needsEscalation) {
       console.log('[Progressive Query] Small model succeeded');
       
       // Format the response
@@ -472,7 +592,18 @@ export async function executeProgressiveQuery(
       feedbackData.smallModelResult = true;
       saveQueryFeedback(feedbackData);
       
-      // Return the successful result
+      // Restore original fs.readFileSync to avoid affecting other operations
+      fs.readFileSync = originalReadFileSync;
+      
+      // Log token usage information
+      console.log(`[Token Tracker] Query complete. Processed ${totalFileProcessingTokens.toLocaleString()} tokens from files`);
+      console.log(`[Token Tracker] Model input tokens: ${feedbackData.tokensSmall?.input.toLocaleString() || 'unknown'}`);
+      console.log(`[Token Tracker] Model output tokens: ${feedbackData.tokensSmall?.output.toLocaleString() || 'unknown'}`);
+      console.log(`[Token Tracker] Total tokens: ${
+        (totalFileProcessingTokens + (feedbackData.tokensSmall?.input || 0)).toLocaleString()
+      }`);
+      
+      // Return the successful result with file processing token count
       return {
         successful: true,
         escalated: false,
@@ -480,12 +611,19 @@ export async function executeProgressiveQuery(
         modelUsed: 'small',
         durationMs: smallModelDuration,
         inputTokens: feedbackData.tokensSmall?.input,
-        outputTokens: feedbackData.tokensSmall?.output
+        outputTokens: feedbackData.tokensSmall?.output,
+        fileProcessingTokens: totalFileProcessingTokens
       };
     }
     
-    // If we get here, the small model didn't find good results
-    console.log('[Progressive Query] Small model failed to find results, escalating...');
+    // If we get here, the small model didn't find good results or they were unreliable
+    console.log('[Progressive Query] Small model results insufficient, escalating...');
+    console.log(`[Progressive Query] Escalation reason: ${
+      hasNoResults ? 'No results found' : 
+      hasStructuralIssues ? 'Structural issues in response' : 
+      hasContentIssues ? 'Content issues or uncertainty' : 
+      'Recent file modifications'
+    }`);
   } catch (error) {
     logError(error);
     console.log('[Progressive Query] Small model encountered an error, escalating...');
@@ -540,7 +678,20 @@ export async function executeProgressiveQuery(
     feedbackData.largeModelResult = true;
     saveQueryFeedback(feedbackData);
     
-    // Return the result
+    // Restore original fs.readFileSync to avoid affecting other operations
+    fs.readFileSync = originalReadFileSync;
+    
+    // Log token usage information
+    console.log(`[Token Tracker] Query complete with large model. Processed ${totalFileProcessingTokens.toLocaleString()} tokens from files`);
+    console.log(`[Token Tracker] Small model tokens: ${feedbackData.tokensSmall?.input || 0} input, ${feedbackData.tokensSmall?.output || 0} output`);
+    console.log(`[Token Tracker] Large model tokens: ${feedbackData.tokensLarge?.input?.toLocaleString() || 'unknown'} input, ${feedbackData.tokensLarge?.output?.toLocaleString() || 'unknown'} output`);
+    console.log(`[Token Tracker] Total search tokens: ${
+      (totalFileProcessingTokens + 
+      (feedbackData.tokensSmall?.input || 0) + 
+      (feedbackData.tokensLarge?.input || 0)).toLocaleString()
+    }`);
+    
+    // Return the result with file processing token count
     return {
       successful: true,
       escalated: true,
@@ -548,7 +699,8 @@ export async function executeProgressiveQuery(
       modelUsed: 'large',
       durationMs: largeModelDuration,
       inputTokens: feedbackData.tokensLarge?.input,
-      outputTokens: feedbackData.tokensLarge?.output
+      outputTokens: feedbackData.tokensLarge?.output,
+      fileProcessingTokens: totalFileProcessingTokens
     };
   } catch (error) {
     logError(error);
@@ -623,12 +775,23 @@ export async function executeProgressiveQuery(
     feedbackData.largeModelResult = false;
     saveQueryFeedback(feedbackData);
     
+    // Restore original fs.readFileSync before returning error response
+    fs.readFileSync = originalReadFileSync;
+    
+    // Log token usage information even for failed queries
+    console.log(`[Token Tracker] Query failed but processed ${totalFileProcessingTokens.toLocaleString()} tokens from files`);
+    console.log(`[Token Tracker] Small model tokens: ${feedbackData.tokensSmall?.input || 0} input, ${feedbackData.tokensSmall?.output || 0} output`);
+    if (feedbackData.tokensLarge) {
+      console.log(`[Token Tracker] Large model tokens: ${feedbackData.tokensLarge.input || 0} input, ${feedbackData.tokensLarge.output || 0} output`);
+    }
+    
     return {
       successful: false,
       escalated: true,
       response: `I couldn't find relevant information in the codebase for your query: "${information_request}"\n\nDiagnostic Information:\n- Attempted a broader reformulated query but still found no results\n- The query may contain entity names that don't match the actual codebase\n- If you're looking for an interface like "SomeProps", try searching for the component file instead\n- If searching for a specific functionality, try broader terms or focus on directories\n\nSuggested Approaches:\n- Try a more general search term like the base name (e.g., "Trade" instead of "TradeFormData")\n- Check specific directories like "components/", "types/", or "interfaces/"\n- Use a keyword search with common patterns (e.g., "interface *Props" or "type *Data")\n- Provide a partial file path if you have an idea where the code might be located`,
       modelUsed: 'large',
-      durationMs: Date.now() - largeModelStartTime
+      durationMs: Date.now() - largeModelStartTime,
+      fileProcessingTokens: totalFileProcessingTokens
     };
   }
 }
