@@ -44,6 +44,7 @@ export interface DependencyInfo {
   }>
   importedBy?: string[]
   exportsTo?: string[]
+  jsxUsage?: Map<string, Array<{propName: string, propValue: any}>> // Track JSX component usage
 }
 
 /**
@@ -61,7 +62,8 @@ export function parseCodeWithAST(filePath: string, fileContent: string): {
   const entities: CodeEntity[] = []
   const dependencies: DependencyInfo = {
     imports: [],
-    exports: []
+    exports: [],
+    jsxUsage: new Map() // Track JSX component usage
   }
 
   // Define file extension and determine parser plugins
@@ -747,6 +749,48 @@ function hasJSXReturn(node: any): boolean {
   }
   
   return hasJSX
+}
+
+/**
+ * Track JSX component usage within a node to identify component relationships
+ * 
+ * @param node The AST node to analyze
+ * @param dependencies Dependency info to update with JSX usage
+ */
+function trackJSXUsage(node: any, dependencies: DependencyInfo): void {
+  if (!dependencies.jsxUsage) {
+    dependencies.jsxUsage = new Map<string, Array<{propName: string, propValue: any}>>();
+  }
+  
+  // Create a traversal visitor to find all JSX elements
+  const visitor = {
+    JSXElement(path: any) {
+      const element = path.node.openingElement;
+      if (t.isJSXIdentifier(element.name)) {
+        const componentName = element.name.name;
+        
+        // Only track components (starting with uppercase)
+        if (/^[A-Z]/.test(componentName)) {
+          if (!dependencies.jsxUsage!.has(componentName)) {
+            dependencies.jsxUsage!.set(componentName, []);
+          }
+          
+          // Track props passing
+          element.attributes.forEach((attr: any) => {
+            if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+              dependencies.jsxUsage!.get(componentName)!.push({
+                propName: attr.name.name,
+                propValue: attr.value
+              });
+            }
+          });
+        }
+      }
+    }
+  };
+  
+  // Use traverse to find all JSX elements
+  traverse(node, visitor);
 }
 
 /**

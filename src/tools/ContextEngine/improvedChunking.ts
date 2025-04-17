@@ -36,6 +36,8 @@ export interface EnhancedCodeChunk {
       usedInComponents?: string[]
       extendsFrom?: string[]
       extendedBy?: string[]
+      jsxUsage?: Array<{componentName: string, props: Array<{name: string, value: any}>}>
+      usesComponents?: string[] // Components used by this component
     }
     typeDefinition?: {
       properties?: Array<{name: string, type: string}>

@@ -452,9 +452,10 @@ export function createContentSearchPatterns(
       patterns.push(`\\bimport\\s+{[^}]*\\b${fileName}\\b[^}]*}\\s+from`)
       patterns.push(`\\bimport\\s+${fileName}\\s+from`)
       
-      // Find where components are used in JSX
-      patterns.push(`<\\s*${fileName}\\s*[^>]*>`) // Opening tag
-      patterns.push(`<\\s*${fileName}\\s*[^>]*/\\s*>`) // Self-closing tag
+      // Find where components are used in JSX - improved patterns
+      patterns.push(`<\\s*${fileName}[\\s>]`) // Self-closing components
+      patterns.push(`<\\s*${fileName}\\s*>[\\s\\S]*?<\\s*/\\s*${fileName}\\s*>`) // Components with children
+      patterns.push(`React\\.createElement\\(\\s*${fileName}[,\\s]`) // React.createElement usage
     }
   }
   
